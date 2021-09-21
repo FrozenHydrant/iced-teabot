@@ -56,7 +56,7 @@ public class Bot {
             if (event.getMember().isPresent()) {
                 if (ts.queueSize() > 0) {
                     joinCall(snowflake, event.getMember().get());
-                    guildAudios.get(snowflake).scheduler.startNextSongInQueue();
+                    ts.startNextSongInQueue();
                 } else {
                     channel.createMessage("**Did not join the call because the queue was empty. Please queue some songs first by using %play.**").block();
                 }
