@@ -18,6 +18,8 @@
 *.zip
 *.tar.gz
 *.rar
+*.lock
+*.bin
 
 #env
 *.env
