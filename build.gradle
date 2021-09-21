@@ -1,6 +1,7 @@
-plugins {
-    id 'java'
-}
+
+
+apply plugin: 'java'
+
 
 group 'org.example'
 version '1.0-SNAPSHOT'
@@ -25,3 +26,13 @@ dependencies {
 test {
     useJUnitPlatform()
 }
+
+jar {
+    manifest {
+        attributes(
+                'Main-Class': 'Bot'
+        )
+    }
+}
+
+
