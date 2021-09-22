@@ -41,14 +41,14 @@ public class Bot {
         System.out.println("go!");
 
         commands.put("ping", event -> {
-            System.out.println("Doing stuff! ping!");
+            //System.out.println("Doing stuff! ping!");
             Guild currentGuild = event.getGuild().block();
             Snowflake snowflake = getCurrentSnowflake(currentGuild);
             final MessageChannel channel = guildAudios.get(snowflake).msc;
             channel.createMessage("**Pong!**").block();
         });
         commands.put("join", event -> {
-            System.out.println("joining.");
+            //System.out.println("joining.");
             Guild currentGuild = event.getGuild().block();
             Snowflake snowflake = getCurrentSnowflake(currentGuild);
             TrackScheduler ts = guildAudios.get(snowflake).scheduler;
@@ -62,14 +62,40 @@ public class Bot {
                 }
             }
         });
+        commands.put("qloop", event -> {
+            //System.out.println("toggling qloop.");
+            Guild currentGuild = event.getGuild().block();
+            Snowflake snowflake = getCurrentSnowflake(currentGuild);
+            final MessageChannel channel = guildAudios.get(snowflake).msc;
+            if (guildAudios.get(snowflake).queuelooping) {
+                channel.createMessage("**Queue loop disabled.**").block();
+                guildAudios.get(snowflake).queuelooping = false;
+            } else {
+                channel.createMessage("**Queue loop enabled.**").block();
+                guildAudios.get(snowflake).queuelooping = true;
+            }
+        });
+        commands.put("loop", event -> {
+            //System.out.println ("toggling loop.");
+            Guild currentGuild = event.getGuild().block();
+            Snowflake snowflake = getCurrentSnowflake(currentGuild);
+            final MessageChannel channel = guildAudios.get(snowflake).msc;
+            if (guildAudios.get(snowflake).singlelooping) {
+                channel.createMessage("**Song loop disabled.**").block();
+                guildAudios.get(snowflake).singlelooping = false;
+            } else {
+                channel.createMessage("**Current song will now loop.**").block();
+                guildAudios.get(snowflake).singlelooping = true;
+            }
+        });
         commands.put("dc", event -> {
-            System.out.println("disconnecting.");
+            //System.out.println("disconnecting.");
             Guild currentGuild = event.getGuild().block();
             Snowflake snowflake = getCurrentSnowflake(currentGuild);
             leaveCall(snowflake);
         });
         commands.put("np", event -> {
-            System.out.println("now playing called");
+            //System.out.println("now playing called");
             Guild currentGuild = event.getGuild().block();
             Snowflake snowflake = getCurrentSnowflake(currentGuild);
             final MessageChannel channel = guildAudios.get(snowflake).msc;
@@ -80,7 +106,7 @@ public class Bot {
                 final long clength = currentTrack.getDuration();
                 final String cdesc = (cposition / 60000) + ":" + (cposition / 1000 % 60 < 10 ? "0" : "") + (cposition / 1000 % 60) + " / " + (clength / 60000) + ":" + (clength / 1000 % 60 < 10 ? "0" : "") + (clength / 1000 % 60);
                 final String curi = currentTrack.getInfo().uri;
-                System.out.println(curi);
+                //System.out.println(curi);
                 channel.createEmbed(spec ->
                         spec.setColor(Color.RUST).setTitle("Now Playing: " + currentTrack.getInfo().title).setUrl(curi).setDescription(cdesc).setThumbnail("https://i.ytimg.com/vi/" + curi.substring(curi.indexOf("=") + 1) + "/hq720.jpg").addField("Author", currentTrack.getInfo().author, false)
                 ).block();
@@ -90,7 +116,7 @@ public class Bot {
 
         });
         commands.put("shuffle", event -> {
-            System.out.println("shuffle");
+            //System.out.println("shuffle");
             Guild currentGuild = event.getGuild().block();
             Snowflake snowflake = getCurrentSnowflake(currentGuild);
             final TrackScheduler ts = guildAudios.get(snowflake).scheduler;
@@ -99,7 +125,7 @@ public class Bot {
             channel.createMessage("**Shuffled playlist.**").block();
         });
         commands.put("skip", event -> {
-            System.out.println("skip");
+            //System.out.println("skip");
             Guild currentGuild = event.getGuild().block();
             Snowflake snowflake = getCurrentSnowflake(currentGuild);
             final TrackScheduler ts = guildAudios.get(snowflake).scheduler;
@@ -107,7 +133,7 @@ public class Bot {
             //final MessageChannel channel = guildAudios.get(snowflake).msc;
         });
         commands.put("clear", event -> {
-            System.out.println("cleared");
+            //System.out.println("cleared");
             Guild currentGuild = event.getGuild().block();
             Snowflake snowflake = getCurrentSnowflake(currentGuild);
             final TrackScheduler ts = guildAudios.get(snowflake).scheduler;
@@ -117,7 +143,7 @@ public class Bot {
 
         });
         commands.put("play", event -> {
-            System.out.println("playing");
+            //System.out.println("playing");
             Guild currentGuild = event.getGuild().block();
             Snowflake snowflake = getCurrentSnowflake(currentGuild);
             final TrackScheduler ts = guildAudios.get(snowflake).scheduler;
@@ -133,7 +159,7 @@ public class Bot {
             }
         });
         commands.put("queue", event -> {
-            System.out.println("queue");
+            //System.out.println("queue");
             Guild currentGuild = event.getGuild().block();
             Snowflake snowflake = getCurrentSnowflake(currentGuild);
             final TrackScheduler ts = guildAudios.get(snowflake).scheduler;
@@ -150,7 +176,8 @@ public class Bot {
                 } else {
                     channel.createEmbed(spec ->
                             spec.setColor(Color.RUST).setTitle("Queue").addField("Queue", messageToBeSent, false).addField("Queue Size", Integer.toString(ts.queueSize()), false)
-                    ).block();                }
+                    ).block();
+                }
             } else {
                 channel.createMessage("**There are no songs in the queue.**").block();
             }
@@ -250,7 +277,7 @@ public class Bot {
             }
             currentVc.disconnect().block();
             //success = true;
-            channel.createMessage("**Disconnected successfully. Queue will be preserved. Use %clear to clear it. **").block();
+            channel.createMessage("**Disconnected successfully. Queue will be preserved. Use %clear to clear it. **").toProcessor().block();
             guildAudios.get(snowflake).vc = null;
         }
     }
@@ -292,12 +319,16 @@ public class Bot {
         public final TrackScheduler scheduler;
         public VoiceConnection vc;
         public MessageChannel msc;
+        public boolean singlelooping;
+        public boolean queuelooping;
 
         private GuildAudioManager(Snowflake id) {
             ap = PLAYER_MANAGER.createPlayer();
             provider = new LavaPlayerAudioProvider(ap);
             scheduler = new TrackScheduler(ap, id);
             ap.addListener(scheduler);
+            singlelooping = false;
+            queuelooping = false;
         }
     }
 
@@ -342,16 +373,16 @@ public class Bot {
             //player.playTrack(track);
             boolean playing = player.startTrack(track, true);
             MessageChannel cmsc = guildAudios.get(id).msc;
-            System.out.println("track loaded");
+            //System.out.println("track loaded");
             if (!playing) {
                 //player.playTrack(track);
                 if (loadTrack(track)) {
-                    cmsc.createMessage("**Added `" + track.getInfo().title + "` to the queue.**").block();
+                    cmsc.createMessage("**Added `" + track.getInfo().title + "` to the queue.**").toProcessor().block();
                 } else {
-                    cmsc.createMessage("**Could not add `" + track.getInfo().title + "` to the queue, because the queue is too large! A maximum of 2000 songs are allowed in the queue.**").block();
+                    cmsc.createMessage("**Could not add `" + track.getInfo().title + "` to the queue, because the queue is too large! A maximum of 2000 songs are allowed in the queue.**").toProcessor().block();
                 }
             } else {
-                cmsc.createMessage("**Now playing: `" + track.getInfo().title + "`.**").block();
+                cmsc.createMessage("**Now playing: `" + track.getInfo().title + "`.**").toProcessor().block();
             }
 
 
@@ -363,12 +394,8 @@ public class Bot {
                 channel.createMessage("**Skipped song.**").block();
                 player.startTrack(currentTracks.remove(0), false);
             } else {
-                leaveCall(id);
-                MessageChannel cmsc = guildAudios.get(id).msc;
-                cmsc.createMessage("**Disconnected from the call because the queue was empty and no song was playing.**").block();
                 player.stopTrack();
             }
-
         }
 
         private boolean loadTrack(AudioTrack t) {
@@ -389,11 +416,11 @@ public class Bot {
             int start = playing ? 1 : 0;
             for (int i = start; i < temp.size(); i++) {
                 if (!loadTrack(temp.get(i))) {
-                    cmsc.createMessage("**Only added " + i + " songs to the queue, because the queue is at its maximum capacity.**").block();
+                    cmsc.createMessage("**Only added " + i + " songs to the queue, because the queue is at its maximum capacity.**").toProcessor().block();
                     return;
                 }
             }
-            cmsc.createMessage("**Added " + temp.size() + " songs to the queue.**").block();
+            cmsc.createMessage("**Added " + temp.size() + " songs to the queue.**").toProcessor().block();
 
 
         }
@@ -411,7 +438,7 @@ public class Bot {
         @Override
         public void loadFailed(final FriendlyException exception) {
             // LavaPlayer could not parse an audio source for some reason
-            System.out.println("load failed");
+            //System.out.println("load failed");
         }
 
         public void clearTracks() {
@@ -447,19 +474,23 @@ public class Bot {
 
         @Override
         public void onTrackEnd(final AudioPlayer player, final AudioTrack track, final AudioTrackEndReason endReason) {
-            System.out.println("deciding what to do at the end of time.");
+            //System.out.println("deciding what to do at the end of time.");
             if (endReason.mayStartNext) {
-                System.out.println("Song ended normally. Starting next track (if in existence)");
-                if (currentTracks.size() > 0) {
-                    player.startTrack(currentTracks.remove(0), true);
+                //System.out.println("Song ended normally. Starting next track (if in existence)");
+                if (guildAudios.get(id).singlelooping) {
+                    //System.out.println("loop this track.");
+                    player.startTrack(track.makeClone(), false);
                 } else {
-                    leaveCall(id);
-                    MessageChannel cmsc = guildAudios.get(id).msc;
-                    cmsc.createMessage("**Disconnected from the call because the queue was empty and no song was playing.**").block();
+                    if (currentTracks.size() > 0) {
+                        player.startTrack(currentTracks.remove(0), true);
+                        if (guildAudios.get(id).queuelooping) {
+                            currentTracks.add(track.makeClone());
+                        }
+                    }
                 }
-            } else {
-                System.out.println("Not starting new track. Reason: " + endReason.name());
             }
+            //System.out.println("Not starting new track. Reason: " + endReason.name());
+
 
             // endReason == FINISHED: A track finished or died by an exception (mayStartNext = true).
             // endReason == LOAD_FAILED: Loading of a track failed (mayStartNext = true).
@@ -471,12 +502,12 @@ public class Bot {
 
         @Override
         public void onTrackStart(AudioPlayer player, AudioTrack track) {
-            System.out.println("New track started");
+            //System.out.println("New track started");
         }
 
         @Override
         public void onPlayerPause(AudioPlayer player) {
-            System.out.println("player paused");
+            //System.out.println("player paused");
         }
     }
 
