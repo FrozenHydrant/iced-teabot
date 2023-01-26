@@ -185,6 +185,7 @@ public class Bot {
 
         });
         commands.put("help", event -> {
+            //System.out.println("helping");
             Guild currentGuild = event.getGuild().block();
             Snowflake snowflake = getCurrentSnowflake(currentGuild);
             final MessageChannel channel = guildAudios.get(snowflake).msc;
@@ -194,6 +195,7 @@ public class Bot {
                 s.append(", ");
             }
             s.append(" are existing commands.");
+            //System.out.println("help\n" + s);
             channel.createEmbed(spec -> spec.setColor(Color.RUST).setTitle("Help").addField("Available Commands", s.toString(), false)).block();
         });
         commands.put("removedupes", event -> {
@@ -215,6 +217,7 @@ public class Bot {
             final Guild guildSentIn = event.getGuild().block();
             final MessageChannel currentChannel = event.getMessage().getChannel().block();
             Member messagingPerson = null;
+            //System.out.println("Guild" + guildSentIn + " channel " + currentChannel);
             if (event.getMember().isPresent()) {
                 messagingPerson = event.getMember().get();
             }
@@ -227,6 +230,7 @@ public class Bot {
                     guildAudios.get(snowflake).msc = currentChannel;
                     int firstSpace = messageContent.indexOf(" ");
                     String commandInQuestion = messageContent.substring(1, firstSpace == -1 ? messageContent.length() : firstSpace);
+                    //System.out.println("commandinquestion " + commandInQuestion);
                     if (commands.containsKey(commandInQuestion)) {
                         commands.get(commandInQuestion).execute(event);
                     }
