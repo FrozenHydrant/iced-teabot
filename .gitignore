@@ -20,6 +20,11 @@
 *.lock
 *.bin
 
+#gradle
+gradle/
+.idea/
+.gradle/
+
 #env
 *.env
 
