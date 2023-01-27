@@ -12,13 +12,13 @@ import java.util.*;
 
 public final class TrackScheduler extends AudioEventAdapter implements AudioLoadResultHandler {
     private static Map<Snowflake, GuildAudioManager> GUILD_AUDIOS;
-    private final Snowflake id;
+    private final Snowflake snowflake;
     private final AudioPlayer player;
     private final LinkedList<AudioTrack> currentTracks = new LinkedList<>();
 
-    public TrackScheduler(final AudioPlayer player, final Map<Snowflake, GuildAudioManager> GUILD_AUDIOS, final Snowflake id) {
+    public TrackScheduler(final AudioPlayer player, final Map<Snowflake, GuildAudioManager> GUILD_AUDIOS, final Snowflake snowflake) {
         this.player = player;
-        this.id = id;
+        this.snowflake = snowflake;
         if (TrackScheduler.GUILD_AUDIOS == null) {
             TrackScheduler.GUILD_AUDIOS = GUILD_AUDIOS;
         }
@@ -29,7 +29,7 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
     }
 
     public String songList() {
-        StringBuilder songList = new StringBuilder();
+        final StringBuilder songList = new StringBuilder();
         int count = 0;
         for (AudioTrack t : currentTracks) {
             count++;
@@ -52,27 +52,22 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
     @Override
     public void trackLoaded(final AudioTrack track) {
         // LavaPlayer found an audio source for us to play
-        //player.playTrack(track);
-        boolean playing = player.startTrack(track, true);
-        MessageChannel cmsc = GUILD_AUDIOS.get(id).msc;
-        //System.out.println("track loaded");
-        if (!playing) {
-            //player.playTrack(track);
+        final boolean isPlaying = player.startTrack(track, true);
+        MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
+        if (!isPlaying) {
             if (loadTrack(track)) {
-                cmsc.createMessage("**Added `" + track.getInfo().title + "` to the queue.**").toProcessor().block();
+                channel.createMessage("**Added `" + track.getInfo().title + "` to the queue.**").toProcessor().block();
             } else {
-                cmsc.createMessage("**Could not add `" + track.getInfo().title + "` to the queue, because the queue is too large! A maximum of 2000 songs are allowed in the queue.**").toProcessor().block();
+                channel.createMessage("**Could not add `" + track.getInfo().title + "` to the queue, because the queue is too large! A maximum of 2000 songs are allowed in the queue.**").toProcessor().block();
             }
         } else {
-            cmsc.createMessage("**Now playing: `" + track.getInfo().title + "`.**").toProcessor().block();
+            channel.createMessage("**Now playing: `" + track.getInfo().title + "`.**").toProcessor().block();
         }
-
-
     }
 
     public void skipSong() {
         if (currentTracks.size() > 0) {
-            MessageChannel channel = GUILD_AUDIOS.get(id).msc;
+            final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
             channel.createMessage("**Skipped song.**").block();
             player.startTrack(currentTracks.remove(0), false);
         } else {
@@ -92,24 +87,21 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
     @Override
     public void playlistLoaded(final AudioPlaylist playlist) {
         // LavaPlayer found multiple AudioTracks from some playlist
-        List<AudioTrack> temp = playlist.getTracks();
-        MessageChannel cmsc = GUILD_AUDIOS.get(id).msc;
-        boolean playing = player.startTrack(temp.get(0), true);
-        int start = playing ? 1 : 0;
-        for (int i = start; i < temp.size(); i++) {
-            if (!loadTrack(temp.get(i))) {
-                cmsc.createMessage("**Only added " + i + " songs to the queue, because the queue is at its maximum capacity.**").toProcessor().block();
+        final List<AudioTrack> songsToLoad = playlist.getTracks();
+        final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
+        final boolean isPlaying = player.startTrack(songsToLoad.get(0), true);
+        final int start = isPlaying ? 1 : 0;
+        for (int i = start; i < songsToLoad.size(); i++) {
+            if (!loadTrack(songsToLoad.get(i))) {
+                channel.createMessage("**Only added " + i + " songs to the queue, because the queue is at its maximum capacity.**").block();
                 return;
             }
         }
-        cmsc.createMessage("**Added " + temp.size() + " songs to the queue.**").toProcessor().block();
-
-
+        channel.createMessage("**Added " + songsToLoad.size() + " songs to the queue.**").block();
     }
 
     @Override
     public void noMatches() {
-
         // LavaPlayer did not find any audio to extract
     }
 
@@ -120,7 +112,6 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
     @Override
     public void loadFailed(final FriendlyException exception) {
         // LavaPlayer could not parse an audio source for some reason
-        //System.out.println("load failed");
     }
 
     public void clearTracks() {
@@ -128,16 +119,16 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
     }
 
     public int clearDupes() {
-        HashSet<String> temp = new HashSet<>();
-        int c = 0;
+        final HashSet<String> uniqueSongs = new HashSet<>();
+        int count = 0;
         for (int i = 0; i < currentTracks.size(); i++) {
-            if (!temp.add(currentTracks.get(i).getInfo().uri)) {
+            if (!uniqueSongs.add(currentTracks.get(i).getInfo().uri)) {
                 currentTracks.remove(i);
-                c++;
+                count++;
                 i--;
             }
         }
-        return c;
+        return count;
     }
 
     public void stopSong() {
@@ -159,21 +150,22 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
         //System.out.println("deciding what to do at the end of time.");
         if (endReason.mayStartNext) {
             //System.out.println("Song ended normally. Starting next track (if in existence)");
-            if (GUILD_AUDIOS.get(id).singlelooping) {
+            if (GUILD_AUDIOS.get(snowflake).isSingleLooping) {
                 //System.out.println("loop this track.");
                 player.startTrack(track.makeClone(), false);
             } else {
                 if (currentTracks.size() > 0) {
                     player.startTrack(currentTracks.remove(0), true);
-                    if (GUILD_AUDIOS.get(id).queuelooping) {
+                    if (GUILD_AUDIOS.get(snowflake).isQueueLooping) {
                         currentTracks.add(track.makeClone());
                     }
                 }
             }
         }
+
+
         //System.out.println("Not starting new track. Reason: " + endReason.name());
-
-
+        //
         // endReason == FINISHED: A track finished or died by an exception (mayStartNext = true).
         // endReason == LOAD_FAILED: Loading of a track failed (mayStartNext = true).
         // endReason == STOPPED: The player was stopped.

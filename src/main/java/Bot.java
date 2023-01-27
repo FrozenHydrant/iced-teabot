@@ -3,9 +3,12 @@ import com.sedmelluq.discord.lavaplayer.player.DefaultAudioPlayerManager;
 import com.sedmelluq.discord.lavaplayer.source.AudioSourceManagers;
 import com.sedmelluq.discord.lavaplayer.track.AudioTrack;
 import com.sedmelluq.discord.lavaplayer.track.playback.NonAllocatingAudioFrameBuffer;
+import discord4j.common.ReactorResources;
 import discord4j.common.util.Snowflake;
 import discord4j.core.DiscordClient;
+import discord4j.core.DiscordClientBuilder;
 import discord4j.core.GatewayDiscordClient;
+import discord4j.core.event.EventDispatcher;
 import discord4j.core.event.domain.message.MessageCreateEvent;
 import discord4j.core.object.VoiceState;
 import discord4j.core.object.entity.Guild;
@@ -16,267 +19,251 @@ import discord4j.core.object.entity.channel.VoiceChannel;
 import discord4j.rest.util.Color;
 import discord4j.voice.VoiceConnection;
 import io.github.cdimascio.dotenv.Dotenv;
+import reactor.netty.http.client.HttpClient;
 
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 
 public class Bot {
-    private static final Map<String, Command> commands = new HashMap<>();
+    private static final Map<String, Command> COMMANDS = new HashMap<>();
     public static final AudioPlayerManager PLAYER_MANAGER = new DefaultAudioPlayerManager();
     public static final Map<Snowflake, GuildAudioManager> GUILD_AUDIOS = new HashMap<>();
 
+
     public static void main(final String[] args) {
+        /*
+         Setup player manager
+        */
         PLAYER_MANAGER.getConfiguration().setFrameBufferFactory(NonAllocatingAudioFrameBuffer::new);
         AudioSourceManagers.registerRemoteSources(PLAYER_MANAGER);
 
-        commands.put("ping", event -> {
-            //System.out.println("Doing stuff! ping!");
-            Guild currentGuild = event.getGuild().block();
-            Snowflake snowflake = getCurrentSnowflake(currentGuild);
-            final MessageChannel channel = GUILD_AUDIOS.get(snowflake).msc;
+        /*
+         Make all commands here
+        */
+        COMMANDS.put("ping", event -> {
+            final Guild guild = event.getGuild().block();
+            final Snowflake snowflake = getCurrentSnowflake(guild);
+            final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
             channel.createMessage("**Pong!**").block();
         });
-        commands.put("join", event -> {
-            //System.out.println("joining.");
-            Guild currentGuild = event.getGuild().block();
-            Snowflake snowflake = getCurrentSnowflake(currentGuild);
-            TrackScheduler ts = GUILD_AUDIOS.get(snowflake).scheduler;
-            final MessageChannel channel = GUILD_AUDIOS.get(snowflake).msc;
+        COMMANDS.put("join", event -> {
+            final Guild guild = event.getGuild().block();
+            final Snowflake snowflake = getCurrentSnowflake(guild);
+            final TrackScheduler trackScheduler = GUILD_AUDIOS.get(snowflake).scheduler;
+            final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
             if (event.getMember().isPresent()) {
-                if (ts.queueSize() > 0) {
+                if (trackScheduler.queueSize() > 0) {
                     joinCall(snowflake, event.getMember().get());
-                    ts.startNextSongInQueue();
+                    trackScheduler.startNextSongInQueue();
                 } else {
                     channel.createMessage("**Did not join the call because the queue was empty. Please queue some songs first by using %play.**").block();
                 }
             }
         });
-        commands.put("qloop", event -> {
-            //System.out.println("toggling qloop.");
-            Guild currentGuild = event.getGuild().block();
-            Snowflake snowflake = getCurrentSnowflake(currentGuild);
-            final MessageChannel channel = GUILD_AUDIOS.get(snowflake).msc;
-            if (GUILD_AUDIOS.get(snowflake).queuelooping) {
+        COMMANDS.put("qloop", event -> {
+            final Guild guild = event.getGuild().block();
+            final Snowflake snowflake = getCurrentSnowflake(guild);
+            final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
+            if (GUILD_AUDIOS.get(snowflake).isQueueLooping) {
                 channel.createMessage("**Queue loop disabled.**").block();
-                GUILD_AUDIOS.get(snowflake).queuelooping = false;
+                GUILD_AUDIOS.get(snowflake).isQueueLooping = false;
             } else {
                 channel.createMessage("**Queue loop enabled.**").block();
-                GUILD_AUDIOS.get(snowflake).queuelooping = true;
+                GUILD_AUDIOS.get(snowflake).isQueueLooping = true;
             }
         });
-        commands.put("loop", event -> {
-            //System.out.println ("toggling loop.");
-            Guild currentGuild = event.getGuild().block();
-            Snowflake snowflake = getCurrentSnowflake(currentGuild);
-            final MessageChannel channel = GUILD_AUDIOS.get(snowflake).msc;
-            if (GUILD_AUDIOS.get(snowflake).singlelooping) {
+        COMMANDS.put("loop", event -> {
+            final Guild guild = event.getGuild().block();
+            final Snowflake snowflake = getCurrentSnowflake(guild);
+            final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
+            if (GUILD_AUDIOS.get(snowflake).isSingleLooping) {
                 channel.createMessage("**Song loop disabled.**").block();
-                GUILD_AUDIOS.get(snowflake).singlelooping = false;
+                GUILD_AUDIOS.get(snowflake).isSingleLooping = false;
             } else {
                 channel.createMessage("**Current song will now loop.**").block();
-                GUILD_AUDIOS.get(snowflake).singlelooping = true;
+                GUILD_AUDIOS.get(snowflake).isSingleLooping = true;
             }
         });
-        commands.put("dc", event -> {
-            //System.out.println("disconnecting.");
-            Guild currentGuild = event.getGuild().block();
-            Snowflake snowflake = getCurrentSnowflake(currentGuild);
+        COMMANDS.put("dc", event -> {
+            final Guild guild = event.getGuild().block();
+            final Snowflake snowflake = getCurrentSnowflake(guild);
             leaveCall(snowflake);
         });
-        commands.put("np", event -> {
-            System.out.println("now playing called");
-            Guild currentGuild = event.getGuild().block();
-            Snowflake snowflake = getCurrentSnowflake(currentGuild);
-            final MessageChannel channel = GUILD_AUDIOS.get(snowflake).msc;
-            final TrackScheduler ts = GUILD_AUDIOS.get(snowflake).scheduler;
-            AudioTrack currentTrack = ts.getCurrentSong();
-            System.out.println("np in guild: " + currentGuild + "\n np called in channel: \n" + channel + " ts:" + ts);
-            if (currentTrack != null) {
-                final long cposition = currentTrack.getPosition();
-                final long clength = currentTrack.getDuration();
-                final String cdesc = (cposition / 60000) + ":" + (cposition / 1000 % 60 < 10 ? "0" : "") + (cposition / 1000 % 60) + " / " + (clength / 60000) + ":" + (clength / 1000 % 60 < 10 ? "0" : "") + (clength / 1000 % 60);
-                final String curi = currentTrack.getInfo().uri;
-                //System.out.println(curi);
-                channel.createEmbed(spec ->
-                        spec.setColor(Color.RUST).setTitle("Now Playing: " + currentTrack.getInfo().title).setUrl(curi).setDescription(cdesc).setThumbnail("https://i.ytimg.com/vi/" + curi.substring(curi.indexOf("=") + 1) + "/hq720.jpg").addField("Author", currentTrack.getInfo().author, false)
-                ).block();
+        COMMANDS.put("np", event -> {
+            final Guild guild = event.getGuild().block();
+            final Snowflake snowflake = getCurrentSnowflake(guild);
+            final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
+            final TrackScheduler trackScheduler = GUILD_AUDIOS.get(snowflake).scheduler;
+            final AudioTrack song = trackScheduler.getCurrentSong();
+            if (song != null) {
+                final long position = song.getPosition();
+                final long duration = song.getDuration();
+                final String tidiedDesc = (position / 60000) + ":" + (position / 1000 % 60 < 10 ? "0" : "") + (position / 1000 % 60) + " / " + (duration / 60000) + ":" + (duration / 1000 % 60 < 10 ? "0" : "") + (duration / 1000 % 60);
+                final String uri = song.getInfo().uri;
+                channel.createEmbed(spec -> spec.setColor(Color.RUST).setTitle("Now Playing: " + song.getInfo().title).setUrl(uri).setDescription(tidiedDesc).setThumbnail("https://i.ytimg.com/vi/" + uri.substring(uri.indexOf("=") + 1) + "/hq720.jpg").addField("Author", song.getInfo().author, false)).block();
             } else {
                 channel.createMessage("**No track is currently playing.**").block();
             }
-
         });
-        commands.put("shuffle", event -> {
-            //System.out.println("shuffle");
-            Guild currentGuild = event.getGuild().block();
-            Snowflake snowflake = getCurrentSnowflake(currentGuild);
-            final TrackScheduler ts = GUILD_AUDIOS.get(snowflake).scheduler;
-            ts.shuffle();
-            final MessageChannel channel = GUILD_AUDIOS.get(snowflake).msc;
+        COMMANDS.put("shuffle", event -> {
+            final Guild currentGuild = event.getGuild().block();
+            final Snowflake snowflake = getCurrentSnowflake(currentGuild);
+            final TrackScheduler trackScheduler = GUILD_AUDIOS.get(snowflake).scheduler;
+            final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
+            trackScheduler.shuffle();
             channel.createMessage("**Shuffled playlist.**").block();
         });
-        commands.put("skip", event -> {
-            //System.out.println("skip");
-            Guild currentGuild = event.getGuild().block();
-            Snowflake snowflake = getCurrentSnowflake(currentGuild);
-            final TrackScheduler ts = GUILD_AUDIOS.get(snowflake).scheduler;
-            ts.skipSong();
-            //final MessageChannel channel = GUILD_AUDIOS.get(snowflake).msc;
+        COMMANDS.put("skip", event -> {
+            final Guild currentGuild = event.getGuild().block();
+            final Snowflake snowflake = getCurrentSnowflake(currentGuild);
+            final TrackScheduler trackScheduler = GUILD_AUDIOS.get(snowflake).scheduler;
+            trackScheduler.skipSong();
         });
-        commands.put("clear", event -> {
-            //System.out.println("cleared");
-            Guild currentGuild = event.getGuild().block();
-            Snowflake snowflake = getCurrentSnowflake(currentGuild);
-            final TrackScheduler ts = GUILD_AUDIOS.get(snowflake).scheduler;
-            final MessageChannel channel = GUILD_AUDIOS.get(snowflake).msc;
+        COMMANDS.put("clear", event -> {
+            final Guild guild = event.getGuild().block();
+            final Snowflake snowflake = getCurrentSnowflake(guild);
+            final TrackScheduler trackScheduler = GUILD_AUDIOS.get(snowflake).scheduler;
+            final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
             channel.createMessage("**Cleared queue.**").block();
-            ts.clearTracks();
-
+            trackScheduler.clearTracks();
         });
-        commands.put("p", event -> {
-            //System.out.println("playing");
-            Guild currentGuild = event.getGuild().block();
-            Snowflake snowflake = getCurrentSnowflake(currentGuild);
-            final TrackScheduler ts = GUILD_AUDIOS.get(snowflake).scheduler;
+        COMMANDS.put("p", event -> {
+            final Guild guild = event.getGuild().block();
+            final Snowflake snowflake = getCurrentSnowflake(guild);
+            final TrackScheduler trackScheduler = GUILD_AUDIOS.get(snowflake).scheduler;
             final Message message = event.getMessage();
             final String content = message.getContent();
-            //System.out.println("playing " + content);
             if (content.contains(" ")) {
-                //System.out.println(content.substring(content.indexOf(" ") + 1));
-                PLAYER_MANAGER.loadItem(content.substring(content.indexOf(" ") + 1), ts);
+                PLAYER_MANAGER.loadItem(content.substring(content.indexOf(" ") + 1), trackScheduler);
                 if (event.getMember().isPresent()) {
                     joinCall(snowflake, event.getMember().get());
                 }
             }
         });
-        commands.put("q", event -> {
-            //System.out.println("queue");
-            Guild currentGuild = event.getGuild().block();
-            Snowflake snowflake = getCurrentSnowflake(currentGuild);
-            final TrackScheduler ts = GUILD_AUDIOS.get(snowflake).scheduler;
-            final MessageChannel channel = GUILD_AUDIOS.get(snowflake).msc;
-            final AudioTrack currentTrack = ts.getCurrentSong();
-            final String messageToBeSent = ts.songList();
-            //channel.createMessage(messageToBeSent).block();
+        COMMANDS.put("q", event -> {
+            final Guild currentGuild = event.getGuild().block();
+            final Snowflake snowflake = getCurrentSnowflake(currentGuild);
+            final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
+            final TrackScheduler trackScheduler = GUILD_AUDIOS.get(snowflake).scheduler;
+            final AudioTrack song = trackScheduler.getCurrentSong();
+            final String messageToBeSent = trackScheduler.songList();
             if (messageToBeSent.length() > 0) {
-                if (currentTrack != null) {
-                    final String curi = currentTrack.getInfo().uri;
-                    channel.createEmbed(spec ->
-                            spec.setColor(Color.RUST).setTitle("Queue").addField("Current Song", currentTrack.getInfo().title, false).setUrl(curi).setThumbnail("https://i.ytimg.com/vi/" + curi.substring(curi.indexOf("=") + 1) + "/hq720.jpg").addField("Queue", messageToBeSent, false).addField("Queue Size", Integer.toString(ts.queueSize()), false)
-                    ).block();
+                if (song != null) {
+                    final String uri = song.getInfo().uri;
+                    channel.createEmbed(spec -> spec.setColor(Color.RUST).setTitle("Queue").addField("Current Song", song.getInfo().title, false).setUrl(uri).setThumbnail("https://i.ytimg.com/vi/" + uri.substring(uri.indexOf("=") + 1) + "/hq720.jpg").addField("Queue", messageToBeSent, false).addField("Queue Size", Integer.toString(trackScheduler.queueSize()), false)).block();
                 } else {
-                    channel.createEmbed(spec ->
-                            spec.setColor(Color.RUST).setTitle("Queue").addField("Queue", messageToBeSent, false).addField("Queue Size", Integer.toString(ts.queueSize()), false)
-                    ).block();
+                    channel.createEmbed(spec -> spec.setColor(Color.RUST).setTitle("Queue").addField("Queue", messageToBeSent, false).addField("Queue Size", Integer.toString(trackScheduler.queueSize()), false)).block();
                 }
             } else {
                 channel.createMessage("**There are no songs in the queue.**").block();
             }
-
-
         });
-        commands.put("help", event -> {
-            //System.out.println("helping");
-            Guild currentGuild = event.getGuild().block();
-            Snowflake snowflake = getCurrentSnowflake(currentGuild);
-            final MessageChannel channel = GUILD_AUDIOS.get(snowflake).msc;
-            StringBuilder s = new StringBuilder();
-            for (String i : commands.keySet()) {
-                s.append(i);
-                s.append(", ");
+        COMMANDS.put("help", event -> {
+            final Guild guild = event.getGuild().block();
+            final Snowflake snowflake = getCurrentSnowflake(guild);
+            final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
+            final StringBuilder commandHelpString = new StringBuilder();
+            for (String command : COMMANDS.keySet()) {
+                commandHelpString.append(command);
+                commandHelpString.append(", ");
             }
-            s.append(" are existing commands.");
-            //System.out.println("help\n" + s);
-            channel.createEmbed(spec -> spec.setColor(Color.RUST).setTitle("Help").addField("Available Commands", s.toString(), false)).block();
+            commandHelpString.append(" are existing commands.");
+            channel.createEmbed(spec -> spec.setColor(Color.RUST).setTitle("Help").addField("Available Commands", commandHelpString.toString(), false)).block();
         });
-        commands.put("removedupes", event -> {
-            Guild currentGuild = event.getGuild().block();
-            Snowflake snowflake = getCurrentSnowflake(currentGuild);
-            final MessageChannel channel = GUILD_AUDIOS.get(snowflake).msc;
-            TrackScheduler ts = GUILD_AUDIOS.get(snowflake).scheduler;
-            channel.createMessage("**Removed " + ts.clearDupes() + " duplicate songs from the queue.**").block();
+        COMMANDS.put("removedupes", event -> {
+            final Guild guild = event.getGuild().block();
+            final Snowflake snowflake = getCurrentSnowflake(guild);
+            final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
+            final TrackScheduler trackScheduler = GUILD_AUDIOS.get(snowflake).scheduler;
+            channel.createMessage("**Removed " + trackScheduler.clearDupes() + " duplicate songs from the queue.**").block();
         });
 
+        /*
+         Load env file, login in, etc.
+        */
         Dotenv dotenv = Dotenv.load();
         final String token = dotenv.get("TOKEN");
-        final DiscordClient client = DiscordClient.create(token);
+        final DiscordClient client = DiscordClientBuilder.create(token).setReactorResources(ReactorResources.builder().httpClient(HttpClient.create().compress(true).keepAlive(false).followRedirect(true).secure()).build()).build();
         final GatewayDiscordClient gateway = client.login().block();
         System.out.println("go!");
 
-
-        gateway.getEventDispatcher().on(MessageCreateEvent.class).subscribe(event -> {
+        /*
+         Get an iterator over all of our events, and handle them accordingly
+        */
+        assert gateway != null;
+        final EventDispatcher myEventDispatcher = gateway.getEventDispatcher();
+        final Iterable<MessageCreateEvent> myEvents = myEventDispatcher.on(MessageCreateEvent.class).toIterable();
+        for (MessageCreateEvent event : myEvents) {
             final String messageContent = event.getMessage().getContent();
-            final Guild guildSentIn = event.getGuild().block();
-            final MessageChannel currentChannel = event.getMessage().getChannel().block();
+            final Guild guild = event.getGuild().block();
+            final MessageChannel channel = event.getMessage().getChannel().block();
             Member messagingPerson = null;
-            //System.out.println("Guild" + guildSentIn + " channel " + currentChannel);
             if (event.getMember().isPresent()) {
                 messagingPerson = event.getMember().get();
             }
-            if (currentChannel != null && messagingPerson != null && !messagingPerson.isBot() && messageContent.length() > 0 && guildSentIn != null) { //prevent processing of commands sent by other bots, or in private messages
+
+            //prevent processing of commands sent by other bots, or in private messages
+            if (channel != null && messagingPerson != null && !messagingPerson.isBot() && messageContent.length() > 0 && guild != null) {
                 if (messageContent.charAt(0) == '%') {
-                    final Snowflake snowflake = getCurrentSnowflake(guildSentIn);
+                    final Snowflake snowflake = getCurrentSnowflake(guild);
                     if (!GUILD_AUDIOS.containsKey(snowflake)) {
                         GUILD_AUDIOS.put(snowflake, new GuildAudioManager(PLAYER_MANAGER, GUILD_AUDIOS, snowflake));
                     }
-                    GUILD_AUDIOS.get(snowflake).msc = currentChannel;
-                    int firstSpace = messageContent.indexOf(" ");
-                    String commandInQuestion = messageContent.substring(1, firstSpace == -1 ? messageContent.length() : firstSpace);
-                    //System.out.println("commandinquestion " + commandInQuestion);
-                    if (commands.containsKey(commandInQuestion)) {
-                        commands.get(commandInQuestion).execute(event);
+                    GUILD_AUDIOS.get(snowflake).messageChannel = channel;
+                    final int firstSpace = messageContent.indexOf(" ");
+                    final String commandInQuestion = messageContent.substring(1, firstSpace == -1 ? messageContent.length() : firstSpace);
+                    if (COMMANDS.containsKey(commandInQuestion)) {
+                        COMMANDS.get(commandInQuestion).execute(event);
                     }
                 }
             }
-        });
-
+        }
 
         gateway.onDisconnect().block();
     }
 
+    /*
+     Gets the snowflake (id) of a given guild.
+    */
     public static Snowflake getCurrentSnowflake(Guild thisGuild) {
         if (thisGuild != null) {
             return thisGuild.getId();
         } else {
-            throw new NullPointerException();
+            throw new NullPointerException("Guild is null");
         }
     }
 
     public static void joinCall(Snowflake snowflake, Member member) {
-        //boolean success = false;
-        //final MessageChannel channel = GUILD_AUDIOS.get(snowflake).msc;
-        //final MessageChannel messageChannel = event.getMessage().getChannel().block()
-
         final LavaPlayerAudioProvider currentProvider = GUILD_AUDIOS.get(snowflake).provider;
-        //System.out.println(GUILD_AUDIOS);
+        final VoiceState voiceState = member.getVoiceState().block();
 
-        VoiceState currentVoiceState = member.getVoiceState().block();
-        if (currentVoiceState != null) {
-            VoiceChannel currentVoiceChannel = currentVoiceState.getChannel().block();
+        /*
+         Use the voice state to attempt to join a voice channel
+        */
+        if (voiceState != null) {
+            final VoiceChannel currentVoiceChannel = voiceState.getChannel().block();
             if (currentVoiceChannel != null) {
-                if (GUILD_AUDIOS.get(snowflake).vc == null) {
-                    GUILD_AUDIOS.get(snowflake).vc = currentVoiceChannel.join(spec -> spec.setProvider(currentProvider)).retry(5).block(Duration.ofSeconds(5));
+                if (GUILD_AUDIOS.get(snowflake).voiceConnection == null) {
+                    GUILD_AUDIOS.get(snowflake).voiceConnection = currentVoiceChannel.join(spec -> spec.setProvider(currentProvider)).retry(5).block(Duration.ofSeconds(5));
                 }
             }
         }
     }
 
     public static void leaveCall(Snowflake snowflake) {
-        final MessageChannel channel = GUILD_AUDIOS.get(snowflake).msc;
-        VoiceConnection currentVc = GUILD_AUDIOS.get(snowflake).vc;
-        TrackScheduler ts = GUILD_AUDIOS.get(snowflake).scheduler;
-        //boolean success = false;
-        if (currentVc != null) {
-            if (ts.getCurrentSong() != null) {
-                ts.stopSong();
+        final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
+        final VoiceConnection voiceConnection = GUILD_AUDIOS.get(snowflake).voiceConnection;
+        final TrackScheduler trackScheduler = GUILD_AUDIOS.get(snowflake).scheduler;
+        if (voiceConnection != null) {
+            if (trackScheduler.getCurrentSong() != null) {
+                trackScheduler.stopSong();
             }
-            currentVc.disconnect().block();
-            //success = true;
-            channel.createMessage("**Disconnected successfully. Queue will be preserved. Use %clear to clear it. **").toProcessor().block();
-            GUILD_AUDIOS.get(snowflake).vc = null;
+            voiceConnection.disconnect().block();
+            channel.createMessage("**Disconnected successfully. Queue will be preserved. Use %clear to clear it. **").block();
+            GUILD_AUDIOS.get(snowflake).voiceConnection = null;
         }
     }
-
 
 
     public interface Command {
