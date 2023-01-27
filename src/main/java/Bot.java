@@ -97,9 +97,12 @@ public class Bot {
             final TrackScheduler trackScheduler = GUILD_AUDIOS.get(snowflake).scheduler;
             final AudioTrack song = trackScheduler.getCurrentSong();
             if (song != null) {
-                final long position = song.getPosition();
-                final long duration = song.getDuration();
-                final String tidiedDesc = (position / 60000) + ":" + (position / 1000 % 60 < 10 ? "0" : "") + (position / 1000 % 60) + " / " + (duration / 60000) + ":" + (duration / 1000 % 60 < 10 ? "0" : "") + (duration / 1000 % 60);
+                final long position = song.getPosition() / 1000;
+                final long duration = song.getDuration() / 1000;
+
+                final int amountCompleted = (int) (((double)position / duration)*10);
+                final String progressThroughSongBuilder = ":blue_square:".repeat(Math.max(0, amountCompleted)) + ":white_medium_small_square:".repeat(Math.max(0, 10 - amountCompleted));
+                final String tidiedDesc = progressThroughSongBuilder + "\n\n **" + generateTimeString(position) + "** / **" + generateTimeString(duration) + "**";
                 final String uri = song.getInfo().uri;
                 channel.createEmbed(spec -> spec.setColor(Color.RUST).setTitle("Now Playing: " + song.getInfo().title).setUrl(uri).setDescription(tidiedDesc).setThumbnail("https://i.ytimg.com/vi/" + uri.substring(uri.indexOf("=") + 1) + "/hq720.jpg").addField("Author", song.getInfo().author, false)).block();
             } else {
@@ -180,7 +183,7 @@ public class Bot {
         });
 
         /*
-         Load env file, login in, etc.
+         Load env file, login, etc.
         */
         Dotenv dotenv = Dotenv.load();
         final String token = dotenv.get("TOKEN");
@@ -221,6 +224,29 @@ public class Bot {
         }
 
         gateway.onDisconnect().block();
+    }
+
+    /*
+     Gets a number of seconds and converts it into the string with format:
+     HH:MM:SS
+    */
+    public static String generateTimeString(long seconds) {
+        final long hours = seconds / 3600;
+        final long minutes = (seconds - hours*3600) / 60;
+        seconds = seconds % 60;
+
+        String stringMinutes = Long.toString(minutes);
+        String stringSeconds = Long.toString(seconds);
+        if(stringSeconds.length() < 2) {
+            stringSeconds = "0" + stringSeconds;
+        }
+        if (hours == 0) {
+            return stringMinutes + ":" + stringSeconds;
+        }
+        if(stringMinutes.length() < 2) {
+            stringMinutes = "0" + stringMinutes;
+        }
+        return hours + ":" + stringMinutes + ":" + stringSeconds;
     }
 
     /*
