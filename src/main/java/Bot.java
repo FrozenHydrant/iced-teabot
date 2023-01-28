@@ -21,6 +21,9 @@ import discord4j.voice.VoiceConnection;
 import io.github.cdimascio.dotenv.Dotenv;
 import reactor.netty.http.client.HttpClient;
 
+import java.io.BufferedReader;
+import java.io.FileReader;
+import java.io.IOException;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
@@ -29,9 +32,9 @@ public class Bot {
     private static final Map<String, Command> COMMANDS = new HashMap<>();
     public static final AudioPlayerManager PLAYER_MANAGER = new DefaultAudioPlayerManager();
     public static final Map<Snowflake, GuildAudioManager> GUILD_AUDIOS = new HashMap<>();
+    public static final Map<String, String> COMMAND_DESCRIPTIONS = new HashMap<>();
 
-
-    public static void main(final String[] args) {
+    public static void main(final String[] args) throws IOException {
         /*
          Setup player manager
         */
@@ -135,10 +138,40 @@ public class Bot {
             final Guild guild = event.getGuild().block();
             final Snowflake snowflake = getCurrentSnowflake(guild);
             final TrackScheduler trackScheduler = GUILD_AUDIOS.get(snowflake).scheduler;
+            final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
             final Message message = event.getMessage();
             final String content = message.getContent();
-            if (content.contains(" ")) {
-                PLAYER_MANAGER.loadItem(content.substring(content.indexOf(" ") + 1), trackScheduler);
+            if (content.split(" ").length > 1) {
+                final String[] arguments = content.split(" ");
+                if (arguments.length > 3) {
+                    try {
+                        final String loadDirection = arguments[3];
+                        if (!loadDirection.equals("front") && !loadDirection.equals("back") && !loadDirection.equals("random")) {
+                            throw new IllegalArgumentException();
+                        }
+                        trackScheduler.setPlaylistLoadDirection(loadDirection);
+                    } catch (IllegalArgumentException e) {
+                        channel.createEmbed(spec -> spec.setColor(Color.RUST).setTitle("Error Executing Command").setDescription("**" + arguments[3] + "** is not a valid option for **direction**! This value should either be `front`, `back`, or `random`.")).block();
+                        return;
+                    }
+                }
+                if (arguments.length > 2) {
+                    try {
+                        final int loadCount = Integer.parseInt(arguments[2]);
+                        if (loadCount < 1) {
+                            throw new NumberFormatException();
+                        }
+                        trackScheduler.setPlaylistLoadCount(loadCount);
+                    } catch (NumberFormatException e) {
+                        channel.createEmbed(spec -> spec.setColor(Color.RUST).setTitle("Error Executing Command").setDescription("**" + arguments[2] + "** is not a valid number for **count**!")).block();
+                        return;
+                    }
+                    trackScheduler.setPlaylistLoadDirection("front");
+                } else {
+                    trackScheduler.setPlaylistLoadCount(Integer.MAX_VALUE);
+                    trackScheduler.setPlaylistLoadDirection("front");
+                }
+                PLAYER_MANAGER.loadItem(arguments[1], trackScheduler);
                 if (event.getMember().isPresent()) {
                     joinCall(snowflake, event.getMember().get());
                 }
@@ -166,13 +199,24 @@ public class Bot {
             final Guild guild = event.getGuild().block();
             final Snowflake snowflake = getCurrentSnowflake(guild);
             final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
-            final StringBuilder commandHelpString = new StringBuilder();
-            for (String command : COMMANDS.keySet()) {
-                commandHelpString.append(command);
-                commandHelpString.append(", ");
+            final String content = event.getMessage().getContent();
+            if(content.split(" ").length < 2) {
+                final StringBuilder commandHelpString = new StringBuilder();
+                for (String command : COMMANDS.keySet()) {
+                    commandHelpString.append(command);
+                    commandHelpString.append(", ");
+                }
+                commandHelpString.append(" are existing commands.");
+                commandHelpString.append("\n\nTo get help with a specific command, type **%help <commandname>**.");
+                channel.createEmbed(spec -> spec.setColor(Color.RUST).setTitle("Help").addField("Available Commands", commandHelpString.toString(), false)).block();
+            } else {
+                final String commandToHelpWith = content.split(" ")[1];
+                if (COMMAND_DESCRIPTIONS.containsKey(commandToHelpWith)) {
+                    channel.createEmbed(spec -> spec.setTitle("Help With Command **" + commandToHelpWith + "**").setDescription(COMMAND_DESCRIPTIONS.get(commandToHelpWith)).setColor(Color.RUST)).block();
+                } else {
+                    channel.createEmbed(spec -> spec.setTitle("Error Executing Command").setDescription("Sorry, we do not currently have resources for **" + commandToHelpWith + "**. Maybe ask the internet?").setColor(Color.RUST)).block();
+                }
             }
-            commandHelpString.append(" are existing commands.");
-            channel.createEmbed(spec -> spec.setColor(Color.RUST).setTitle("Help").addField("Available Commands", commandHelpString.toString(), false)).block();
         });
         COMMANDS.put("removedupes", event -> {
             final Guild guild = event.getGuild().block();
@@ -189,6 +233,31 @@ public class Bot {
         final String token = dotenv.get("TOKEN");
         final DiscordClient client = DiscordClientBuilder.create(token).setReactorResources(ReactorResources.builder().httpClient(HttpClient.create().compress(true).keepAlive(false).followRedirect(true).secure()).build()).build();
         final GatewayDiscordClient gateway = client.login().block();
+
+        /*
+         Construct documentation
+        */
+        final BufferedReader bufferedReader = new BufferedReader(new FileReader("documentation.txt"));
+        String documentationLine = bufferedReader.readLine();
+        String beingDocumented = null;
+        StringBuilder documentationDescription = new StringBuilder();
+        while (documentationLine != null) {
+            if (COMMANDS.containsKey(documentationLine)) {
+                if (beingDocumented != null) {
+                    COMMAND_DESCRIPTIONS.put(beingDocumented, documentationDescription.toString());
+                }
+                beingDocumented = documentationLine;
+                documentationDescription = new StringBuilder();
+            } else {
+                documentationDescription.append(documentationLine).append("\n");
+            }
+            documentationLine = bufferedReader.readLine();
+        }
+        if (beingDocumented != null) {
+            COMMAND_DESCRIPTIONS.put(beingDocumented, documentationDescription.toString());
+        }
+        bufferedReader.close();
+
         System.out.println("go!");
 
         /*

@@ -1,0 +1,19 @@
+help
+Can be used to figure out what other commands do, and how to use their optional arguments. Arguments are always space-seperated. Triangle brackets indicate mandatory arguments, square brackets indicate optional arguments.
+p
+Adds a song or playlist to the queue.
+
+
+__Usage:__
+**p <url> [count] [direction]**
+
+**__url__** - The url of the song/playlist
+
+The following arguments will only be considered if url represents a playlist:
+
+**__count__** - The number of tracks to take from the playlist. Default is all of them.
+
+**__direction__** - can be either `front`, `back`, or `random`.
+    `front`   - Takes songs starting from the front of the playlist.
+    `back`  - Takes songs starting from the back of the playlist.
+    `random` - Takes songs randomly from the playlist

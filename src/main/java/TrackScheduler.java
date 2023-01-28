@@ -7,6 +7,7 @@ import com.sedmelluq.discord.lavaplayer.track.AudioTrack;
 import com.sedmelluq.discord.lavaplayer.track.AudioTrackEndReason;
 import discord4j.common.util.Snowflake;
 import discord4j.core.object.entity.channel.MessageChannel;
+import discord4j.rest.util.Color;
 
 import java.util.*;
 
@@ -15,13 +16,25 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
     private final Snowflake snowflake;
     private final AudioPlayer player;
     private final LinkedList<AudioTrack> currentTracks = new LinkedList<>();
+    private int playlistLoadCount;
+    private String playlistLoadDirection;
 
     public TrackScheduler(final AudioPlayer player, final Map<Snowflake, GuildAudioManager> GUILD_AUDIOS, final Snowflake snowflake) {
         this.player = player;
         this.snowflake = snowflake;
+        this.playlistLoadCount = Integer.MAX_VALUE;
+        this.playlistLoadDirection = "front";
         if (TrackScheduler.GUILD_AUDIOS == null) {
             TrackScheduler.GUILD_AUDIOS = GUILD_AUDIOS;
         }
+    }
+
+    public void setPlaylistLoadCount(int playlistLoadCount) {
+        this.playlistLoadCount = playlistLoadCount;
+    }
+
+    public void setPlaylistLoadDirection(String playlistLoadDirection) {
+        this.playlistLoadDirection = playlistLoadDirection;
     }
 
     public int queueSize() {
@@ -53,15 +66,10 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
     public void trackLoaded(final AudioTrack track) {
         // LavaPlayer found an audio source for us to play
         final boolean isPlaying = player.startTrack(track, true);
-        MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
+        final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
         if (!isPlaying) {
-            if (loadTrack(track)) {
-                channel.createMessage("**Added `" + track.getInfo().title + "` to the queue.**").toProcessor().block();
-            } else {
-                channel.createMessage("**Could not add `" + track.getInfo().title + "` to the queue, because the queue is too large! A maximum of 2000 songs are allowed in the queue.**").toProcessor().block();
-            }
-        } else {
-            channel.createMessage("**Now playing: `" + track.getInfo().title + "`.**").toProcessor().block();
+            loadTrack(track);
+            channel.createMessage("**Added `" + track.getInfo().title + "` to the queue.**").block();
         }
     }
 
@@ -75,13 +83,8 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
         }
     }
 
-    private boolean loadTrack(AudioTrack t) {
-        if (currentTracks.size() < 2000) {
-            currentTracks.add(t);
-            return true;
-        } else {
-            return false;
-        }
+    private void loadTrack(AudioTrack t) {
+        currentTracks.add(t);
     }
 
     @Override
@@ -89,15 +92,55 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
         // LavaPlayer found multiple AudioTracks from some playlist
         final List<AudioTrack> songsToLoad = playlist.getTracks();
         final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
-        final boolean isPlaying = player.startTrack(songsToLoad.get(0), true);
-        final int start = isPlaying ? 1 : 0;
-        for (int i = start; i < songsToLoad.size(); i++) {
-            if (!loadTrack(songsToLoad.get(i))) {
-                channel.createMessage("**Only added " + i + " songs to the queue, because the queue is at its maximum capacity.**").block();
-                return;
+        long durationCount = 0;
+        String initialUri = "";
+        switch (playlistLoadDirection) {
+            case "front" -> {
+                final boolean isPlaying = player.startTrack(songsToLoad.get(0), true);
+                final int start = isPlaying ? 1 : 0;
+                for (int i = start; i < Math.min(songsToLoad.size(), playlistLoadCount); i++) {
+                    AudioTrack song = songsToLoad.get(i);
+                    durationCount += song.getDuration();
+                    loadTrack(song);
+                    if (initialUri.equals("")) {
+                        initialUri = song.getInfo().uri;
+                    }
+                }
+            }
+            case "back" -> {
+                final boolean isPlaying = player.startTrack(songsToLoad.get(songsToLoad.size() - 1), true);
+                final int start = isPlaying ? 1 : 0;
+                int count = start;
+                for (int i = songsToLoad.size() - 1 - start; i > -1; i--) {
+                    AudioTrack song = songsToLoad.get(i);
+                    durationCount += song.getDuration();
+                    loadTrack(song);
+                    if (initialUri.equals("")) {
+                        initialUri = song.getInfo().uri;
+                    }
+                    count++;
+                    if (count >= playlistLoadCount) {
+                        break;
+                    }
+                }
+            }
+            case "random" -> {
+                Collections.shuffle(songsToLoad);
+                final boolean isPlaying = player.startTrack(songsToLoad.get(0), true);
+                final int start = isPlaying ? 1 : 0;
+                for (int i = start; i < Math.min(songsToLoad.size(), playlistLoadCount); i++) {
+                    AudioTrack song = songsToLoad.get(i);
+                    durationCount += song.getDuration();
+                    loadTrack(song);
+                    if (initialUri.equals("")) {
+                        initialUri = song.getInfo().uri;
+                    }
+                }
             }
         }
-        channel.createMessage("**Added " + songsToLoad.size() + " songs to the queue.**").block();
+        final long totalDuration = durationCount / 1000;
+        final String displayUri = initialUri;
+        channel.createEmbed(spec -> spec.setTitle("Successfully Added Songs To Queue").setColor(Color.RUST).setThumbnail("https://i.ytimg.com/vi/" + displayUri.substring(displayUri.indexOf("=") + 1) + "/hq720.jpg").addField("Amount", Integer.toString(Math.min(songsToLoad.size(), playlistLoadCount)), false).addField("Length", Bot.generateTimeString(totalDuration), false).addField("Direction", playlistLoadDirection, true)).block();
     }
 
     @Override
@@ -137,7 +180,7 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
 
     public void startNextSongInQueue() {
         if (currentTracks.size() > 0) {
-            player.startTrack(currentTracks.remove(0), true);
+            player.startTrack(currentTracks.remove(0), false);
         }
     }
 
@@ -155,7 +198,7 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
                 player.startTrack(track.makeClone(), false);
             } else {
                 if (currentTracks.size() > 0) {
-                    player.startTrack(currentTracks.remove(0), true);
+                    player.startTrack(currentTracks.remove(0), false);
                     if (GUILD_AUDIOS.get(snowflake).isQueueLooping) {
                         currentTracks.add(track.makeClone());
                     }
@@ -177,6 +220,9 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
     @Override
     public void onTrackStart(AudioPlayer player, AudioTrack track) {
         //System.out.println("New track started");
+        final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
+        final String uri = track.getInfo().uri;
+        channel.createEmbed(spec -> spec.setColor(Color.RUST).setTitle("Now Playing: " + track.getInfo().title).setUrl(uri).setDescription("").setThumbnail("https://i.ytimg.com/vi/" + uri.substring(uri.indexOf("=") + 1) + "/hq720.jpg").addField("Author", track.getInfo().author, false)).block();
     }
 
     @Override
