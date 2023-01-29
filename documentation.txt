@@ -1,7 +1,7 @@
 help
 Can be used to figure out what other commands do, and how to use their optional arguments. Arguments are always space-seperated. Triangle brackets indicate mandatory arguments, square brackets indicate optional arguments.
 p
-Adds a song or playlist to the queue.
+Adds a song or playlist to the end of the queue.
 
 
 __Usage:__
@@ -11,9 +11,17 @@ __Usage:__
 
 The following arguments will only be considered if url represents a playlist:
 
-**__count__** - The number of tracks to take from the playlist. Default is all of them.
+**__count__** - (Optional) The number of tracks to take from the playlist. Default is all of them.
 
-**__direction__** - can be either `front`, `back`, or `random`.
+**__direction__** - (Optional) can be either `front`, `back`, or `random`.
     `front`   - Takes songs starting from the front of the playlist.
     `back`  - Takes songs starting from the back of the playlist.
     `random` - Takes songs randomly from the playlist
+q
+Check the contents of the queue.
+
+
+__Usage:__
+**q [page]**
+
+**__page__** - (Optional) specifies the page of the queue to look at. If omitted, **q** will give the first page.

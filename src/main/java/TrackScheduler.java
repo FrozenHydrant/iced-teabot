@@ -6,6 +6,7 @@ import com.sedmelluq.discord.lavaplayer.track.AudioPlaylist;
 import com.sedmelluq.discord.lavaplayer.track.AudioTrack;
 import com.sedmelluq.discord.lavaplayer.track.AudioTrackEndReason;
 import discord4j.common.util.Snowflake;
+import discord4j.core.object.entity.Message;
 import discord4j.core.object.entity.channel.MessageChannel;
 import discord4j.rest.util.Color;
 
@@ -15,10 +16,10 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
     private static Map<Snowflake, GuildAudioManager> GUILD_AUDIOS;
     private final Snowflake snowflake;
     private final AudioPlayer player;
-    private final LinkedList<AudioTrack> currentTracks = new LinkedList<>();
+    private final ArrayList<EnhancedSong> currentTracks = new ArrayList<>();
     private int playlistLoadCount;
     private String playlistLoadDirection;
-
+    private Message mostRecentMessage;
     public TrackScheduler(final AudioPlayer player, final Map<Snowflake, GuildAudioManager> GUILD_AUDIOS, final Snowflake snowflake) {
         this.player = player;
         this.snowflake = snowflake;
@@ -33,6 +34,10 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
         this.playlistLoadCount = playlistLoadCount;
     }
 
+    public void updateMostRecentMessage(Message message) {
+        this.mostRecentMessage = message;
+    }
+
     public void setPlaylistLoadDirection(String playlistLoadDirection) {
         this.playlistLoadDirection = playlistLoadDirection;
     }
@@ -44,12 +49,12 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
     public String songList() {
         final StringBuilder songList = new StringBuilder();
         int count = 0;
-        for (AudioTrack t : currentTracks) {
+        for (EnhancedSong t : currentTracks) {
             count++;
             StringBuilder addition = new StringBuilder();
             addition.append(count);
             addition.append(". ");
-            addition.append(t.getInfo().title);
+            addition.append(t.song.getInfo().title);
             addition.append("\n");
             if (songList.length() + addition.length() > 500) {
                 songList.append("... and many others.");
@@ -77,14 +82,14 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
         if (currentTracks.size() > 0) {
             final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
             channel.createMessage("**Skipped song.**").block();
-            player.startTrack(currentTracks.remove(0), false);
+            player.startTrack(currentTracks.remove(0).song, false);
         } else {
             player.stopTrack();
         }
     }
 
     private void loadTrack(AudioTrack t) {
-        currentTracks.add(t);
+        currentTracks.add(new EnhancedSong(mostRecentMessage, t));
     }
 
     @Override
@@ -93,6 +98,7 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
         final List<AudioTrack> songsToLoad = playlist.getTracks();
         final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
         long durationCount = 0;
+        final int insertedIndex = queueSize() + 1;
         String initialUri = "";
         switch (playlistLoadDirection) {
             case "front" -> {
@@ -140,7 +146,7 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
         }
         final long totalDuration = durationCount / 1000;
         final String displayUri = initialUri;
-        channel.createEmbed(spec -> spec.setTitle("Successfully Added Songs To Queue").setColor(Color.RUST).setThumbnail("https://i.ytimg.com/vi/" + displayUri.substring(displayUri.indexOf("=") + 1) + "/hq720.jpg").addField("Amount", Integer.toString(Math.min(songsToLoad.size(), playlistLoadCount)), false).addField("Length", Bot.generateTimeString(totalDuration), false).addField("Direction", playlistLoadDirection, true)).block();
+        channel.createEmbed(spec -> spec.setTitle("Successfully Added Songs To Queue").setColor(Color.RUST).setThumbnail("https://i.ytimg.com/vi/" + displayUri.substring(displayUri.indexOf("=") + 1) + "/hq720.jpg").addField("Amount", Integer.toString(Math.min(songsToLoad.size(), playlistLoadCount)), false).addField("Length", Bot.generateTimeString(totalDuration), true).addField("Direction", playlistLoadDirection, true).addField("Position in Queue", Integer.toString(insertedIndex), true)).block();
     }
 
     @Override
@@ -165,7 +171,7 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
         final HashSet<String> uniqueSongs = new HashSet<>();
         int count = 0;
         for (int i = 0; i < currentTracks.size(); i++) {
-            if (!uniqueSongs.add(currentTracks.get(i).getInfo().uri)) {
+            if (!uniqueSongs.add(currentTracks.get(i).song.getInfo().uri)) {
                 currentTracks.remove(i);
                 count++;
                 i--;
@@ -180,7 +186,7 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
 
     public void startNextSongInQueue() {
         if (currentTracks.size() > 0) {
-            player.startTrack(currentTracks.remove(0), false);
+            player.startTrack(currentTracks.remove(0).song, false);
         }
     }
 
@@ -198,9 +204,9 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
                 player.startTrack(track.makeClone(), false);
             } else {
                 if (currentTracks.size() > 0) {
-                    player.startTrack(currentTracks.remove(0), false);
+                    player.startTrack(currentTracks.remove(0).song, false);
                     if (GUILD_AUDIOS.get(snowflake).isQueueLooping) {
-                        currentTracks.add(track.makeClone());
+                        currentTracks.add(new EnhancedSong(null, track.makeClone()));
                     }
                 }
             }

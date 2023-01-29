@@ -141,6 +141,8 @@ public class Bot {
             final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
             final Message message = event.getMessage();
             final String content = message.getContent();
+            trackScheduler.setPlaylistLoadCount(Integer.MAX_VALUE);
+            trackScheduler.setPlaylistLoadDirection("front");
             if (content.split(" ").length > 1) {
                 final String[] arguments = content.split(" ");
                 if (arguments.length > 3) {
@@ -166,11 +168,8 @@ public class Bot {
                         channel.createEmbed(spec -> spec.setColor(Color.RUST).setTitle("Error Executing Command").setDescription("**" + arguments[2] + "** is not a valid number for **count**!")).block();
                         return;
                     }
-                    trackScheduler.setPlaylistLoadDirection("front");
-                } else {
-                    trackScheduler.setPlaylistLoadCount(Integer.MAX_VALUE);
-                    trackScheduler.setPlaylistLoadDirection("front");
                 }
+                trackScheduler.updateMostRecentMessage(message);
                 PLAYER_MANAGER.loadItem(arguments[1], trackScheduler);
                 if (event.getMember().isPresent()) {
                     joinCall(snowflake, event.getMember().get());
