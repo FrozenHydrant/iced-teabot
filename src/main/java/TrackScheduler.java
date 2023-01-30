@@ -7,6 +7,7 @@ import com.sedmelluq.discord.lavaplayer.track.AudioTrack;
 import com.sedmelluq.discord.lavaplayer.track.AudioTrackEndReason;
 import discord4j.common.util.Snowflake;
 import discord4j.core.object.entity.Message;
+import discord4j.core.object.entity.User;
 import discord4j.core.object.entity.channel.MessageChannel;
 import discord4j.rest.util.Color;
 
@@ -16,7 +17,7 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
     private static Map<Snowflake, GuildAudioManager> GUILD_AUDIOS;
     private final Snowflake snowflake;
     private final AudioPlayer player;
-    private final ArrayList<EnhancedSong> currentTracks = new ArrayList<>();
+    private final LinkedList<AudioTrack> currentTracks = new LinkedList<>();
     private int playlistLoadCount;
     private String playlistLoadDirection;
     private Message mostRecentMessage;
@@ -46,23 +47,26 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
         return currentTracks.size();
     }
 
-    public String songList() {
+    public String songList(int page) {
         final StringBuilder songList = new StringBuilder();
+        final int bottomBound = (page-1)*10;
+        final int tracksSize = currentTracks.size();
         int count = 0;
-        for (EnhancedSong t : currentTracks) {
+        for (AudioTrack t : currentTracks.subList(Math.min(bottomBound, tracksSize), Math.min(bottomBound+10, tracksSize))) {
             count++;
             StringBuilder addition = new StringBuilder();
-            addition.append(count);
-            addition.append(". ");
-            addition.append(t.song.getInfo().title);
-            addition.append("\n");
-            if (songList.length() + addition.length() > 500) {
-                songList.append("... and many others.");
-                break;
-            } else {
-                songList.append(addition);
-            }
+            final String userName;
+            final Optional<User> optionalUser = ((AdditionalSongInfo) t.getUserData()).message.getAuthor();
+            userName = optionalUser.map(User::getUsername).orElse("");
+            addition.append("**")
+                    .append(count)
+                    .append("** - ")
+                    .append(t.getInfo().title)
+                    .append("  |  **")
+                    .append(userName)
+                    .append("**\n\n");
 
+            songList.append(addition);
         }
         return songList.toString();
     }
@@ -82,14 +86,47 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
         if (currentTracks.size() > 0) {
             final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
             channel.createMessage("**Skipped song.**").block();
-            player.startTrack(currentTracks.remove(0).song, false);
+            player.startTrack(currentTracks.remove(0), false);
         } else {
             player.stopTrack();
         }
     }
 
     private void loadTrack(AudioTrack t) {
-        currentTracks.add(new EnhancedSong(mostRecentMessage, t));
+        t.setUserData(new AdditionalSongInfo(mostRecentMessage));
+        currentTracks.add(t);
+    }
+
+    /*
+     Ensures that every user has amount songs enqueued.
+     */
+    public void equalize(int amount) {
+        final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
+        final HashMap<Snowflake, List<AudioTrack>> userTracks = new HashMap<>();
+        for (AudioTrack audioTrack: currentTracks) {
+            final Optional<User> user = ((AdditionalSongInfo)audioTrack.getUserData()).message.getAuthor();
+            if (user.isPresent()) {
+                Snowflake userId = user.get().getId();
+                if (!userTracks.containsKey(userId)) {
+                    userTracks.put(userId, new ArrayList<>());
+                }
+                userTracks.get(userId).add(audioTrack);
+            }
+        }
+
+        for (List<AudioTrack> audioTracks: userTracks.values()) {
+            final List<AudioTrack> toRemove = audioTracks.subList(Math.min(amount, audioTracks.size()), audioTracks.size());
+            for (AudioTrack audioTrack: toRemove) {
+                currentTracks.remove(audioTrack);
+            }
+        }
+
+        //TODO: actually make this embed good
+        channel.createEmbed(spec -> spec.setTitle("Successfully Trimmed Queue").setColor(Color.RUST)).block();
+    }
+
+    public void infolize() {
+
     }
 
     @Override
@@ -151,6 +188,7 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
 
     @Override
     public void noMatches() {
+        //System.out.println("no matches");
         // LavaPlayer did not find any audio to extract
     }
 
@@ -160,6 +198,7 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
 
     @Override
     public void loadFailed(final FriendlyException exception) {
+        System.out.println("load failed " + exception.getCause());
         // LavaPlayer could not parse an audio source for some reason
     }
 
@@ -171,7 +210,7 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
         final HashSet<String> uniqueSongs = new HashSet<>();
         int count = 0;
         for (int i = 0; i < currentTracks.size(); i++) {
-            if (!uniqueSongs.add(currentTracks.get(i).song.getInfo().uri)) {
+            if (!uniqueSongs.add(currentTracks.get(i).getInfo().identifier)) {
                 currentTracks.remove(i);
                 count++;
                 i--;
@@ -186,7 +225,7 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
 
     public void startNextSongInQueue() {
         if (currentTracks.size() > 0) {
-            player.startTrack(currentTracks.remove(0).song, false);
+            player.startTrack(currentTracks.remove(0), false);
         }
     }
 
@@ -204,9 +243,9 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
                 player.startTrack(track.makeClone(), false);
             } else {
                 if (currentTracks.size() > 0) {
-                    player.startTrack(currentTracks.remove(0).song, false);
+                    player.startTrack(currentTracks.remove(0), false);
                     if (GUILD_AUDIOS.get(snowflake).isQueueLooping) {
-                        currentTracks.add(new EnhancedSong(null, track.makeClone()));
+                        currentTracks.add(track.makeClone());
                     }
                 }
             }

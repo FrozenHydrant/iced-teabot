@@ -182,7 +182,7 @@ public class Bot {
             final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
             final TrackScheduler trackScheduler = GUILD_AUDIOS.get(snowflake).scheduler;
             final AudioTrack song = trackScheduler.getCurrentSong();
-            final String messageToBeSent = trackScheduler.songList();
+            final String messageToBeSent = trackScheduler.songList(1);
             if (messageToBeSent.length() > 0) {
                 if (song != null) {
                     final String uri = song.getInfo().uri;
@@ -223,6 +223,23 @@ public class Bot {
             final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
             final TrackScheduler trackScheduler = GUILD_AUDIOS.get(snowflake).scheduler;
             channel.createMessage("**Removed " + trackScheduler.clearDupes() + " duplicate songs from the queue.**").block();
+        });
+        //TODO: add documentation
+        COMMANDS.put("equalize", event -> {
+            final Guild guild = event.getGuild().block();
+            final Snowflake snowflake = getCurrentSnowflake(guild);
+            final TrackScheduler trackScheduler = GUILD_AUDIOS.get(snowflake).scheduler;
+            final String content = event.getMessage().getContent();
+            if(content.split(" ").length > 1) {
+                final String[] arguments = content.split(" ");
+                int splitAmount = Integer.MAX_VALUE;
+                try {
+                    splitAmount = Integer.parseInt(arguments[1]);
+                } catch (NumberFormatException e) {
+                    //TODO: put some message
+                }
+                trackScheduler.equalize(splitAmount);
+            }
         });
 
         /*
