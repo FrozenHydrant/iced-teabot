@@ -14,6 +14,7 @@ import discord4j.core.object.VoiceState;
 import discord4j.core.object.entity.Guild;
 import discord4j.core.object.entity.Member;
 import discord4j.core.object.entity.Message;
+import discord4j.core.object.entity.User;
 import discord4j.core.object.entity.channel.MessageChannel;
 import discord4j.core.object.entity.channel.VoiceChannel;
 import discord4j.rest.util.Color;
@@ -25,14 +26,14 @@ import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.IOException;
 import java.time.Duration;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
 
 public class Bot {
     private static final Map<String, Command> COMMANDS = new HashMap<>();
     public static final AudioPlayerManager PLAYER_MANAGER = new DefaultAudioPlayerManager();
     public static final Map<Snowflake, GuildAudioManager> GUILD_AUDIOS = new HashMap<>();
     public static final Map<String, String> COMMAND_DESCRIPTIONS = new HashMap<>();
+    public static final Color THEME_COLOR = Color.RUST;
 
     public static void main(final String[] args) throws IOException {
         /*
@@ -55,13 +56,18 @@ public class Bot {
             final Snowflake snowflake = getCurrentSnowflake(guild);
             final TrackScheduler trackScheduler = GUILD_AUDIOS.get(snowflake).scheduler;
             final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
-            if (event.getMember().isPresent()) {
-                if (trackScheduler.queueSize() > 0) {
-                    joinCall(snowflake, event.getMember().get());
-                    trackScheduler.startNextSongInQueue();
-                } else {
-                    channel.createMessage("**Did not join the call because the queue was empty. Please queue some songs first by using %play.**").block();
-                }
+            if (GUILD_AUDIOS.get(snowflake).voiceConnection != null) {
+                channel.createMessage("**Already in call**").block();
+                return;
+            }
+            if (event.getMember().isEmpty()) {
+                return;
+            }
+            if (trackScheduler.queueSize() > 0) {
+                joinCall(snowflake, event.getMember().get());
+                trackScheduler.startSongOrNextSongInQueue();
+            } else {
+                channel.createMessage("**Did not join the call because the queue was empty. Please queue some songs first by using %play.**").block();
             }
         });
         COMMANDS.put("qloop", event -> {
@@ -105,9 +111,13 @@ public class Bot {
 
                 final int amountCompleted = (int) (((double)position / duration)*10);
                 final String progressThroughSongBuilder = ":blue_square:".repeat(Math.max(0, amountCompleted)) + ":white_medium_small_square:".repeat(Math.max(0, 10 - amountCompleted));
-                final String tidiedDesc = progressThroughSongBuilder + "\n\n **" + generateTimeString(position) + "** / **" + generateTimeString(duration) + "**";
+                final String tidiedDesc = progressThroughSongBuilder + "\n **" + generateTimeString(position) + "** / **" + generateTimeString(duration) + "**";
                 final String uri = song.getInfo().uri;
-                channel.createEmbed(spec -> spec.setColor(Color.RUST).setTitle("Now Playing: " + song.getInfo().title).setUrl(uri).setDescription(tidiedDesc).setThumbnail("https://i.ytimg.com/vi/" + uri.substring(uri.indexOf("=") + 1) + "/hq720.jpg").addField("Author", song.getInfo().author, false)).block();
+                final String thumbnailUri = uri.contains("soundcloud.com") ? "https://developers.soundcloud.com/assets/logo_big_white-65c2b096da68dd533db18b9f07d14054.png" : "https://i.ytimg.com/vi/" + uri.substring(uri.indexOf("=") + 1) + "/hq720.jpg";
+                final String authorUri = uri.contains("soundcloud.com") ? uri.substring(0, uri.lastIndexOf("/")) : "";
+                final Optional<User> optionalUser = ((AdditionalSongInfo) song.getUserData()).message.getAuthor();
+                final String requesterName = optionalUser.map(User::getUsername).orElse("");
+                channel.createEmbed(spec -> spec.setColor(THEME_COLOR).setTitle("Now Playing").addField(song.getInfo().title, tidiedDesc, false).addField("Requested By", requesterName, false).setUrl(uri).setThumbnail(thumbnailUri).setAuthor(song.getInfo().author, authorUri, "")).block();
             } else {
                 channel.createMessage("**No track is currently playing.**").block();
             }
@@ -153,7 +163,7 @@ public class Bot {
                         }
                         trackScheduler.setPlaylistLoadDirection(loadDirection);
                     } catch (IllegalArgumentException e) {
-                        channel.createEmbed(spec -> spec.setColor(Color.RUST).setTitle("Error Executing Command").setDescription("**" + arguments[3] + "** is not a valid option for **direction**! This value should either be `front`, `back`, or `random`.")).block();
+                        channel.createEmbed(spec -> spec.setColor(THEME_COLOR).setTitle("Error Executing Command").setDescription("**" + arguments[3] + "** is not a valid option for **direction**! This value should either be `front`, `back`, or `random`.")).block();
                         return;
                     }
                 }
@@ -165,7 +175,7 @@ public class Bot {
                         }
                         trackScheduler.setPlaylistLoadCount(loadCount);
                     } catch (NumberFormatException e) {
-                        channel.createEmbed(spec -> spec.setColor(Color.RUST).setTitle("Error Executing Command").setDescription("**" + arguments[2] + "** is not a valid number for **count**!")).block();
+                        channel.createEmbed(spec -> spec.setColor(THEME_COLOR).setTitle("Error Executing Command").setDescription("**" + arguments[2] + "** is not a valid number for **count**!")).block();
                         return;
                     }
                 }
@@ -180,15 +190,33 @@ public class Bot {
             final Guild currentGuild = event.getGuild().block();
             final Snowflake snowflake = getCurrentSnowflake(currentGuild);
             final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
+            final String content = event.getMessage().getContent();
             final TrackScheduler trackScheduler = GUILD_AUDIOS.get(snowflake).scheduler;
             final AudioTrack song = trackScheduler.getCurrentSong();
-            final String messageToBeSent = trackScheduler.songList(1);
+            final String messageToBeSent;
+            final String[] arguments = content.split(" ");
+            int tentativePageNum = 1;
+            if (arguments.length > 1) {
+                try {
+                    tentativePageNum = Integer.parseInt(arguments[1]);
+                } catch (NumberFormatException e) {
+                    channel.createEmbed(spec -> spec.setColor(THEME_COLOR).setTitle("Error Executing Command").setDescription("**" + arguments[1] + "** is not a valid argument for **page number**!")).block();
+                    return;
+                }
+            }
+            try {
+                messageToBeSent = trackScheduler.songList(tentativePageNum);
+            } catch (IndexOutOfBoundsException e) {
+                channel.createEmbed(spec -> spec.setColor(THEME_COLOR).setTitle("Error Executing Command").setDescription("**" + arguments[1] + "** is out of range!")).block();
+                return;
+            }
+            final int pageNum = tentativePageNum;
             if (messageToBeSent.length() > 0) {
                 if (song != null) {
                     final String uri = song.getInfo().uri;
-                    channel.createEmbed(spec -> spec.setColor(Color.RUST).setTitle("Queue").addField("Current Song", song.getInfo().title, false).setUrl(uri).setThumbnail("https://i.ytimg.com/vi/" + uri.substring(uri.indexOf("=") + 1) + "/hq720.jpg").addField("Queue", messageToBeSent, false).addField("Queue Size", Integer.toString(trackScheduler.queueSize()), false)).block();
+                    channel.createEmbed(spec -> spec.setColor(THEME_COLOR).setTitle("Queue").addField("Current Song", song.getInfo().title, false).setUrl(uri).setThumbnail("https://i.ytimg.com/vi/" + uri.substring(uri.indexOf("=") + 1) + "/hq720.jpg").addField("Queue", messageToBeSent, true).addField("Queue Size", Integer.toString(trackScheduler.queueSize()), false).addField("Page", pageNum + " / " + ((trackScheduler.queueSize()/10)+1), false)).block();
                 } else {
-                    channel.createEmbed(spec -> spec.setColor(Color.RUST).setTitle("Queue").addField("Queue", messageToBeSent, false).addField("Queue Size", Integer.toString(trackScheduler.queueSize()), false)).block();
+                    channel.createEmbed(spec -> spec.setColor(THEME_COLOR).setTitle("Queue").addField("Queue", messageToBeSent, false).addField("Queue Size", Integer.toString(trackScheduler.queueSize()), false).addField("Page", pageNum + " / " + ((trackScheduler.queueSize()/10)+1), true)).block();
                 }
             } else {
                 channel.createMessage("**There are no songs in the queue.**").block();
@@ -207,22 +235,24 @@ public class Bot {
                 }
                 commandHelpString.append(" are existing commands.");
                 commandHelpString.append("\n\nTo get help with a specific command, type **%help <commandname>**.");
-                channel.createEmbed(spec -> spec.setColor(Color.RUST).setTitle("Help").addField("Available Commands", commandHelpString.toString(), false)).block();
+                channel.createEmbed(spec -> spec.setColor(THEME_COLOR).setTitle("Help").addField("Available Commands", commandHelpString.toString(), false)).block();
             } else {
                 final String commandToHelpWith = content.split(" ")[1];
                 if (COMMAND_DESCRIPTIONS.containsKey(commandToHelpWith)) {
-                    channel.createEmbed(spec -> spec.setTitle("Help With Command **" + commandToHelpWith + "**").setDescription(COMMAND_DESCRIPTIONS.get(commandToHelpWith)).setColor(Color.RUST)).block();
+                    channel.createEmbed(spec -> spec.setTitle("Help With Command **" + commandToHelpWith + "**").setDescription(COMMAND_DESCRIPTIONS.get(commandToHelpWith)).setColor(THEME_COLOR)).block();
                 } else {
-                    channel.createEmbed(spec -> spec.setTitle("Error Executing Command").setDescription("Sorry, we do not currently have resources for **" + commandToHelpWith + "**. Maybe ask the internet?").setColor(Color.RUST)).block();
+                    channel.createEmbed(spec -> spec.setTitle("Error Executing Command").setDescription("Sorry, we do not currently have resources for **" + commandToHelpWith + "**. Maybe ask the internet?").setColor(THEME_COLOR)).block();
                 }
             }
         });
+        //TODO: add documentation
         COMMANDS.put("removedupes", event -> {
             final Guild guild = event.getGuild().block();
             final Snowflake snowflake = getCurrentSnowflake(guild);
             final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
             final TrackScheduler trackScheduler = GUILD_AUDIOS.get(snowflake).scheduler;
-            channel.createMessage("**Removed " + trackScheduler.clearDupes() + " duplicate songs from the queue.**").block();
+            final int dupesCleared = trackScheduler.clearDupes();
+            channel.createEmbed(spec -> spec.setTitle("Duplicate Songs Removed").addField("Amount Removed", Integer.toString(dupesCleared), false).setColor(THEME_COLOR)).block();
         });
         //TODO: add documentation
         COMMANDS.put("equalize", event -> {
@@ -230,16 +260,52 @@ public class Bot {
             final Snowflake snowflake = getCurrentSnowflake(guild);
             final TrackScheduler trackScheduler = GUILD_AUDIOS.get(snowflake).scheduler;
             final String content = event.getMessage().getContent();
+            int splitAmount = Integer.MAX_VALUE;
             if(content.split(" ").length > 1) {
                 final String[] arguments = content.split(" ");
-                int splitAmount = Integer.MAX_VALUE;
                 try {
                     splitAmount = Integer.parseInt(arguments[1]);
                 } catch (NumberFormatException e) {
                     //TODO: put some message
                 }
-                trackScheduler.equalize(splitAmount);
+            } else {
+                /*
+                 Trim song count to be the least # of songs requested by any user but excluding outliers
+                */
+                //TODO: better algo
+                final ArrayList<Integer> songsRequested = new ArrayList<>(trackScheduler.amountQueuedByUser.values());
+                Collections.sort(songsRequested);
+                final int middle = songsRequested.size()/2;
+                final int right = (middle + songsRequested.size())/2;
+                final int left = middle / 2;
+                final int iqr = songsRequested.get(right) - songsRequested.get(left);
+                final double leftLimit = songsRequested.get(left) - iqr*1.5;
+                int min = Integer.MAX_VALUE;
+                for (int i: songsRequested) {
+                    if (i > leftLimit) {
+                        min = Math.min(min, i);
+                    }
+                }
+                splitAmount = min;
             }
+            trackScheduler.equalize(splitAmount);
+        });
+        //TODO: add documentation
+        COMMANDS.put("qinfo", event -> {
+            final Guild guild = event.getGuild().block();
+            final Snowflake snowflake = getCurrentSnowflake(guild);
+            final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
+            final TrackScheduler trackScheduler = GUILD_AUDIOS.get(snowflake).scheduler;
+            final StringBuilder infoList = new StringBuilder();
+            for (Snowflake userSnowflake: trackScheduler.amountQueuedByUser.keySet()) {
+                String username = Objects.requireNonNull(guild.getMemberById(userSnowflake).block()).getDisplayName();
+                infoList.append("**")
+                        .append(username)
+                        .append("** : ")
+                        .append(trackScheduler.amountQueuedByUser.get(userSnowflake))
+                        .append("\n");
+            }
+            channel.createEmbed(spec -> spec.setTitle("Info About Queue").addField("Songs Queued By", infoList.toString(), false).setColor(THEME_COLOR)).block();
         });
 
         /*
@@ -365,14 +431,13 @@ public class Bot {
     public static void leaveCall(Snowflake snowflake) {
         final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
         final VoiceConnection voiceConnection = GUILD_AUDIOS.get(snowflake).voiceConnection;
-        final TrackScheduler trackScheduler = GUILD_AUDIOS.get(snowflake).scheduler;
         if (voiceConnection != null) {
-            if (trackScheduler.getCurrentSong() != null) {
-                trackScheduler.stopSong();
-            }
+            //if (trackScheduler.getCurrentSong() != null) {
+            //    trackScheduler.stopSong();
+            //}
+            GUILD_AUDIOS.get(snowflake).voiceConnection = null;
             voiceConnection.disconnect().block();
             channel.createMessage("**Disconnected successfully. Queue will be preserved. Use %clear to clear it. **").block();
-            GUILD_AUDIOS.get(snowflake).voiceConnection = null;
         }
     }
 

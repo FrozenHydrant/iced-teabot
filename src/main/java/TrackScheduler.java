@@ -9,7 +9,6 @@ import discord4j.common.util.Snowflake;
 import discord4j.core.object.entity.Message;
 import discord4j.core.object.entity.User;
 import discord4j.core.object.entity.channel.MessageChannel;
-import discord4j.rest.util.Color;
 
 import java.util.*;
 
@@ -18,6 +17,7 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
     private final Snowflake snowflake;
     private final AudioPlayer player;
     private final LinkedList<AudioTrack> currentTracks = new LinkedList<>();
+    public final HashMap<Snowflake, Integer> amountQueuedByUser = new HashMap<>();
     private int playlistLoadCount;
     private String playlistLoadDirection;
     private Message mostRecentMessage;
@@ -31,6 +31,14 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
         }
     }
 
+    /*
+     Returns a (deep) copy of the amounts queued by user.
+    */
+    /*
+    public HashMap<Snowflake, Integer> getAmountsQueued() {
+        HashMap<>
+    }
+    */
     public void setPlaylistLoadCount(int playlistLoadCount) {
         this.playlistLoadCount = playlistLoadCount;
     }
@@ -51,7 +59,7 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
         final StringBuilder songList = new StringBuilder();
         final int bottomBound = (page-1)*10;
         final int tracksSize = currentTracks.size();
-        int count = 0;
+        int count = (page-1) * 10;
         for (AudioTrack t : currentTracks.subList(Math.min(bottomBound, tracksSize), Math.min(bottomBound+10, tracksSize))) {
             count++;
             StringBuilder addition = new StringBuilder();
@@ -68,12 +76,16 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
 
             songList.append(addition);
         }
+        if (bottomBound+10 < tracksSize) {
+            songList.append("*and more...*\n");
+        }
         return songList.toString();
     }
 
     @Override
     public void trackLoaded(final AudioTrack track) {
         // LavaPlayer found an audio source for us to play
+        track.setUserData(new AdditionalSongInfo(mostRecentMessage));
         final boolean isPlaying = player.startTrack(track, true);
         final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
         if (!isPlaying) {
@@ -83,17 +95,24 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
     }
 
     public void skipSong() {
+        final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
         if (currentTracks.size() > 0) {
-            final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
-            channel.createMessage("**Skipped song.**").block();
-            player.startTrack(currentTracks.remove(0), false);
+            channel.createMessage("**Skipped song. Now playing:**").block();
+            final AudioTrack toPlay = currentTracks.remove(0);
+            final Optional<User> trackRequester = ((AdditionalSongInfo)toPlay.getUserData()).message.getAuthor();
+            trackRequester.ifPresent(user -> amountQueuedByUser.put(user.getId(), amountQueuedByUser.getOrDefault(user.getId(), 1) - 1));
+            player.startTrack(toPlay, false);
         } else {
             player.stopTrack();
+            channel.createMessage("**Skipped song. No song is currently playing.**").block();
         }
     }
 
     private void loadTrack(AudioTrack t) {
+        assert mostRecentMessage != null;
         t.setUserData(new AdditionalSongInfo(mostRecentMessage));
+        final Optional<User> trackRequester = mostRecentMessage.getAuthor();
+        trackRequester.ifPresent(user -> amountQueuedByUser.put(user.getId(), amountQueuedByUser.getOrDefault(user.getId(), 0) + 1));
         currentTracks.add(t);
     }
 
@@ -117,12 +136,14 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
         for (List<AudioTrack> audioTracks: userTracks.values()) {
             final List<AudioTrack> toRemove = audioTracks.subList(Math.min(amount, audioTracks.size()), audioTracks.size());
             for (AudioTrack audioTrack: toRemove) {
+                final Optional<User> trackRequester = ((AdditionalSongInfo)audioTrack.getUserData()).message.getAuthor();
+                trackRequester.ifPresent(user -> amountQueuedByUser.put(user.getId(), amountQueuedByUser.getOrDefault(user.getId(), 1) - 1));
                 currentTracks.remove(audioTrack);
             }
         }
 
         //TODO: actually make this embed good
-        channel.createEmbed(spec -> spec.setTitle("Successfully Trimmed Queue").setColor(Color.RUST)).block();
+        channel.createEmbed(spec -> spec.setTitle("Successfully Trimmed Queue").setColor(Bot.THEME_COLOR)).block();
     }
 
     public void infolize() {
@@ -139,7 +160,9 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
         String initialUri = "";
         switch (playlistLoadDirection) {
             case "front" -> {
-                final boolean isPlaying = player.startTrack(songsToLoad.get(0), true);
+                AudioTrack track = songsToLoad.get(0);
+                track.setUserData(new AdditionalSongInfo(mostRecentMessage));
+                final boolean isPlaying = player.startTrack(track, true);
                 final int start = isPlaying ? 1 : 0;
                 for (int i = start; i < Math.min(songsToLoad.size(), playlistLoadCount); i++) {
                     AudioTrack song = songsToLoad.get(i);
@@ -151,7 +174,9 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
                 }
             }
             case "back" -> {
-                final boolean isPlaying = player.startTrack(songsToLoad.get(songsToLoad.size() - 1), true);
+                AudioTrack track = songsToLoad.get(songsToLoad.size() - 1);
+                track.setUserData(new AdditionalSongInfo(mostRecentMessage));
+                final boolean isPlaying = player.startTrack(track, true);
                 final int start = isPlaying ? 1 : 0;
                 int count = start;
                 for (int i = songsToLoad.size() - 1 - start; i > -1; i--) {
@@ -169,7 +194,9 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
             }
             case "random" -> {
                 Collections.shuffle(songsToLoad);
-                final boolean isPlaying = player.startTrack(songsToLoad.get(0), true);
+                AudioTrack track = songsToLoad.get(0);
+                track.setUserData(new AdditionalSongInfo(mostRecentMessage));
+                final boolean isPlaying = player.startTrack(track, true);
                 final int start = isPlaying ? 1 : 0;
                 for (int i = start; i < Math.min(songsToLoad.size(), playlistLoadCount); i++) {
                     AudioTrack song = songsToLoad.get(i);
@@ -183,7 +210,7 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
         }
         final long totalDuration = durationCount / 1000;
         final String displayUri = initialUri;
-        channel.createEmbed(spec -> spec.setTitle("Successfully Added Songs To Queue").setColor(Color.RUST).setThumbnail("https://i.ytimg.com/vi/" + displayUri.substring(displayUri.indexOf("=") + 1) + "/hq720.jpg").addField("Amount", Integer.toString(Math.min(songsToLoad.size(), playlistLoadCount)), false).addField("Length", Bot.generateTimeString(totalDuration), true).addField("Direction", playlistLoadDirection, true).addField("Position in Queue", Integer.toString(insertedIndex), true)).block();
+        channel.createEmbed(spec -> spec.setTitle("Successfully Added Songs To Queue").setColor(Bot.THEME_COLOR).setThumbnail("https://i.ytimg.com/vi/" + displayUri.substring(displayUri.indexOf("=") + 1) + "/hq720.jpg").addField("Amount", Integer.toString(Math.min(songsToLoad.size(), playlistLoadCount)), false).addField("Length", Bot.generateTimeString(totalDuration), true).addField("Direction", playlistLoadDirection, true).addField("Position in Queue", Integer.toString(insertedIndex), true)).block();
     }
 
     @Override
@@ -203,6 +230,7 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
     }
 
     public void clearTracks() {
+        amountQueuedByUser.clear();
         currentTracks.clear();
     }
 
@@ -211,7 +239,9 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
         int count = 0;
         for (int i = 0; i < currentTracks.size(); i++) {
             if (!uniqueSongs.add(currentTracks.get(i).getInfo().identifier)) {
-                currentTracks.remove(i);
+                final AudioTrack removed = currentTracks.remove(i);
+                final Optional<User> trackRequester = ((AdditionalSongInfo)removed.getUserData()).message.getAuthor();
+                trackRequester.ifPresent(user -> amountQueuedByUser.put(user.getId(), amountQueuedByUser.getOrDefault(user.getId(), 1) - 1));
                 count++;
                 i--;
             }
@@ -223,9 +253,16 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
         player.stopTrack();
     }
 
-    public void startNextSongInQueue() {
+    public void startSongOrNextSongInQueue() {
+        if (getCurrentSong() != null) {
+            player.startTrack(getCurrentSong(), true);
+            return;
+        }
         if (currentTracks.size() > 0) {
-            player.startTrack(currentTracks.remove(0), false);
+            final AudioTrack removed = currentTracks.remove(0);
+            final Optional<User> trackRequester = ((AdditionalSongInfo)removed.getUserData()).message.getAuthor();
+            trackRequester.ifPresent(user -> amountQueuedByUser.put(user.getId(), amountQueuedByUser.getOrDefault(user.getId(), 1) - 1));
+            player.startTrack(removed, true);
         }
     }
 
@@ -243,9 +280,13 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
                 player.startTrack(track.makeClone(), false);
             } else {
                 if (currentTracks.size() > 0) {
-                    player.startTrack(currentTracks.remove(0), false);
+                    final AudioTrack removed = currentTracks.remove(0);
+                    player.startTrack(removed, false);
                     if (GUILD_AUDIOS.get(snowflake).isQueueLooping) {
                         currentTracks.add(track.makeClone());
+                    } else {
+                        final Optional<User> trackRequester = ((AdditionalSongInfo)removed.getUserData()).message.getAuthor();
+                        trackRequester.ifPresent(user -> amountQueuedByUser.put(user.getId(), amountQueuedByUser.getOrDefault(user.getId(), 1) - 1));
                     }
                 }
             }
@@ -267,7 +308,11 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
         //System.out.println("New track started");
         final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
         final String uri = track.getInfo().uri;
-        channel.createEmbed(spec -> spec.setColor(Color.RUST).setTitle("Now Playing: " + track.getInfo().title).setUrl(uri).setDescription("").setThumbnail("https://i.ytimg.com/vi/" + uri.substring(uri.indexOf("=") + 1) + "/hq720.jpg").addField("Author", track.getInfo().author, false)).block();
+        final String thumbnailUri = uri.contains("soundcloud.com") ? "https://developers.soundcloud.com/assets/logo_big_white-65c2b096da68dd533db18b9f07d14054.png" : "https://i.ytimg.com/vi/" + uri.substring(uri.indexOf("=") + 1) + "/hq720.jpg";
+        final String authorUri = uri.contains("soundcloud.com") ? uri.substring(0, uri.lastIndexOf("/")) : "";
+        final Optional<User> optionalUser = ((AdditionalSongInfo) track.getUserData()).message.getAuthor();
+        final String requesterName = optionalUser.map(User::getUsername).orElse("");
+        channel.createEmbed(spec -> spec.setColor(Bot.THEME_COLOR).setTitle("**" + track.getInfo().title + "**").setUrl(uri).setThumbnail(thumbnailUri).addField("Requested By", requesterName, false).setAuthor(track.getInfo().author, authorUri, "")).block();
     }
 
     @Override
