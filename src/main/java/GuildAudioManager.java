@@ -1,6 +1,7 @@
 import com.sedmelluq.discord.lavaplayer.player.AudioPlayer;
 import com.sedmelluq.discord.lavaplayer.player.AudioPlayerManager;
 import discord4j.common.util.Snowflake;
+import discord4j.core.object.entity.Guild;
 import discord4j.core.object.entity.channel.MessageChannel;
 import discord4j.voice.VoiceConnection;
 
@@ -15,10 +16,13 @@ public class GuildAudioManager {
     protected boolean isSingleLooping;
     protected boolean isQueueLooping;
 
-    protected GuildAudioManager(final AudioPlayerManager APM, final Map<Snowflake, GuildAudioManager> GUILD_AUDIOS, Snowflake id) {
+    protected final Guild guild;
+
+    protected GuildAudioManager(final AudioPlayerManager APM, final Map<Snowflake, GuildAudioManager> GUILD_AUDIOS, Snowflake id, Guild guild) {
         ap = APM.createPlayer();
         provider = new LavaPlayerAudioProvider(ap);
-        scheduler = new TrackScheduler(ap, GUILD_AUDIOS, id);
+        this.guild = guild;
+        scheduler = new TrackScheduler(ap, GUILD_AUDIOS, id, guild);
         ap.addListener(scheduler);
         isSingleLooping = false;
         isQueueLooping = false;

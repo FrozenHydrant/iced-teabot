@@ -6,6 +6,8 @@ import com.sedmelluq.discord.lavaplayer.track.AudioPlaylist;
 import com.sedmelluq.discord.lavaplayer.track.AudioTrack;
 import com.sedmelluq.discord.lavaplayer.track.AudioTrackEndReason;
 import discord4j.common.util.Snowflake;
+import discord4j.core.object.entity.Guild;
+import discord4j.core.object.entity.Member;
 import discord4j.core.object.entity.Message;
 import discord4j.core.object.entity.User;
 import discord4j.core.object.entity.channel.MessageChannel;
@@ -15,17 +17,19 @@ import java.util.*;
 public final class TrackScheduler extends AudioEventAdapter implements AudioLoadResultHandler {
     private static Map<Snowflake, GuildAudioManager> GUILD_AUDIOS;
     private final Snowflake snowflake;
+    private final Guild guild;
     private final AudioPlayer player;
     private final LinkedList<AudioTrack> currentTracks = new LinkedList<>();
     public final HashMap<Snowflake, Integer> amountQueuedByUser = new HashMap<>();
     private int playlistLoadCount;
     private String playlistLoadDirection;
-    private Message mostRecentMessage;
-    public TrackScheduler(final AudioPlayer player, final Map<Snowflake, GuildAudioManager> GUILD_AUDIOS, final Snowflake snowflake) {
+    private Snowflake senderMostRecent;
+    public TrackScheduler(final AudioPlayer player, final Map<Snowflake, GuildAudioManager> GUILD_AUDIOS, final Snowflake snowflake, final Guild guild) {
         this.player = player;
         this.snowflake = snowflake;
         this.playlistLoadCount = Integer.MAX_VALUE;
         this.playlistLoadDirection = "front";
+        this.guild = guild;
         if (TrackScheduler.GUILD_AUDIOS == null) {
             TrackScheduler.GUILD_AUDIOS = GUILD_AUDIOS;
         }
@@ -43,8 +47,8 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
         this.playlistLoadCount = playlistLoadCount;
     }
 
-    public void updateMostRecentMessage(Message message) {
-        this.mostRecentMessage = message;
+    public void updateSenderMostRecent(User user) {
+        this.senderMostRecent = user.getId();
     }
 
     public void setPlaylistLoadDirection(String playlistLoadDirection) {
@@ -55,7 +59,24 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
         return currentTracks.size();
     }
 
-    public String songList(int page) {
+    public List<AudioTrack> songList() {
+        LinkedList<AudioTrack> toReturn = new LinkedList<>();
+        for (AudioTrack song: currentTracks) {
+            toReturn.add(song.makeClone());
+        }
+        return toReturn;
+    }
+
+    public static String getAuthorFromId(Guild guild, AdditionalSongInfo additionalSongInfo) {
+        Snowflake userId = additionalSongInfo.requesterId;
+        Member member = guild.getMemberById(userId).block();
+        if (member != null) {
+            return member.getDisplayName();
+        }
+        return "Unknown";
+    }
+
+    public String songListString(int page) {
         final StringBuilder songList = new StringBuilder();
         final int bottomBound = (page-1)*10;
         final int tracksSize = currentTracks.size();
@@ -63,9 +84,7 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
         for (AudioTrack t : currentTracks.subList(Math.min(bottomBound, tracksSize), Math.min(bottomBound+10, tracksSize))) {
             count++;
             StringBuilder addition = new StringBuilder();
-            final String userName;
-            final Optional<User> optionalUser = ((AdditionalSongInfo) t.getUserData()).message.getAuthor();
-            userName = optionalUser.map(User::getUsername).orElse("");
+            final String userName = getAuthorFromId(guild, (AdditionalSongInfo) t.getUserData());
             addition.append("**")
                     .append(count)
                     .append("** - ")
@@ -85,7 +104,7 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
     @Override
     public void trackLoaded(final AudioTrack track) {
         // LavaPlayer found an audio source for us to play
-        track.setUserData(new AdditionalSongInfo(mostRecentMessage));
+        track.setUserData(new AdditionalSongInfo(senderMostRecent));
         final boolean isPlaying = player.startTrack(track, true);
         final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
         if (!isPlaying) {
@@ -99,8 +118,8 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
         if (currentTracks.size() > 0) {
             channel.createMessage("**Skipped song. Now playing:**").block();
             final AudioTrack toPlay = currentTracks.remove(0);
-            final Optional<User> trackRequester = ((AdditionalSongInfo)toPlay.getUserData()).message.getAuthor();
-            trackRequester.ifPresent(user -> amountQueuedByUser.put(user.getId(), amountQueuedByUser.getOrDefault(user.getId(), 1) - 1));
+            final Snowflake userId = ((AdditionalSongInfo)toPlay.getUserData()).requesterId;
+            amountQueuedByUser.put(userId, amountQueuedByUser.getOrDefault(userId, 1) - 1);
             player.startTrack(toPlay, false);
         } else {
             player.stopTrack();
@@ -109,10 +128,8 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
     }
 
     private void loadTrack(AudioTrack t) {
-        assert mostRecentMessage != null;
-        t.setUserData(new AdditionalSongInfo(mostRecentMessage));
-        final Optional<User> trackRequester = mostRecentMessage.getAuthor();
-        trackRequester.ifPresent(user -> amountQueuedByUser.put(user.getId(), amountQueuedByUser.getOrDefault(user.getId(), 0) + 1));
+        t.setUserData(new AdditionalSongInfo(senderMostRecent));
+        amountQueuedByUser.put(senderMostRecent, amountQueuedByUser.getOrDefault(senderMostRecent, 0) + 1);
         currentTracks.add(t);
     }
 
@@ -123,21 +140,18 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
         final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
         final HashMap<Snowflake, List<AudioTrack>> userTracks = new HashMap<>();
         for (AudioTrack audioTrack: currentTracks) {
-            final Optional<User> user = ((AdditionalSongInfo)audioTrack.getUserData()).message.getAuthor();
-            if (user.isPresent()) {
-                Snowflake userId = user.get().getId();
-                if (!userTracks.containsKey(userId)) {
-                    userTracks.put(userId, new ArrayList<>());
-                }
-                userTracks.get(userId).add(audioTrack);
+            final Snowflake userId = ((AdditionalSongInfo)audioTrack.getUserData()).requesterId;
+            if (!userTracks.containsKey(userId)) {
+                userTracks.put(userId, new ArrayList<>());
             }
+            userTracks.get(userId).add(audioTrack);
         }
 
         for (List<AudioTrack> audioTracks: userTracks.values()) {
             final List<AudioTrack> toRemove = audioTracks.subList(Math.min(amount, audioTracks.size()), audioTracks.size());
             for (AudioTrack audioTrack: toRemove) {
-                final Optional<User> trackRequester = ((AdditionalSongInfo)audioTrack.getUserData()).message.getAuthor();
-                trackRequester.ifPresent(user -> amountQueuedByUser.put(user.getId(), amountQueuedByUser.getOrDefault(user.getId(), 1) - 1));
+                final Snowflake userId = ((AdditionalSongInfo)audioTrack.getUserData()).requesterId;
+                amountQueuedByUser.put(userId, amountQueuedByUser.getOrDefault(userId, 1) - 1);
                 currentTracks.remove(audioTrack);
             }
         }
@@ -161,7 +175,7 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
         switch (playlistLoadDirection) {
             case "front" -> {
                 AudioTrack track = songsToLoad.get(0);
-                track.setUserData(new AdditionalSongInfo(mostRecentMessage));
+                track.setUserData(new AdditionalSongInfo(senderMostRecent));
                 final boolean isPlaying = player.startTrack(track, true);
                 final int start = isPlaying ? 1 : 0;
                 for (int i = start; i < Math.min(songsToLoad.size(), playlistLoadCount); i++) {
@@ -175,7 +189,7 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
             }
             case "back" -> {
                 AudioTrack track = songsToLoad.get(songsToLoad.size() - 1);
-                track.setUserData(new AdditionalSongInfo(mostRecentMessage));
+                track.setUserData(new AdditionalSongInfo(senderMostRecent));
                 final boolean isPlaying = player.startTrack(track, true);
                 final int start = isPlaying ? 1 : 0;
                 int count = start;
@@ -195,7 +209,7 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
             case "random" -> {
                 Collections.shuffle(songsToLoad);
                 AudioTrack track = songsToLoad.get(0);
-                track.setUserData(new AdditionalSongInfo(mostRecentMessage));
+                track.setUserData(new AdditionalSongInfo(senderMostRecent));
                 final boolean isPlaying = player.startTrack(track, true);
                 final int start = isPlaying ? 1 : 0;
                 for (int i = start; i < Math.min(songsToLoad.size(), playlistLoadCount); i++) {
@@ -240,8 +254,8 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
         for (int i = 0; i < currentTracks.size(); i++) {
             if (!uniqueSongs.add(currentTracks.get(i).getInfo().identifier)) {
                 final AudioTrack removed = currentTracks.remove(i);
-                final Optional<User> trackRequester = ((AdditionalSongInfo)removed.getUserData()).message.getAuthor();
-                trackRequester.ifPresent(user -> amountQueuedByUser.put(user.getId(), amountQueuedByUser.getOrDefault(user.getId(), 1) - 1));
+                final Snowflake userId = ((AdditionalSongInfo)removed.getUserData()).requesterId;
+                amountQueuedByUser.put(userId, amountQueuedByUser.getOrDefault(userId, 1) - 1);
                 count++;
                 i--;
             }
@@ -260,8 +274,8 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
         }
         if (currentTracks.size() > 0) {
             final AudioTrack removed = currentTracks.remove(0);
-            final Optional<User> trackRequester = ((AdditionalSongInfo)removed.getUserData()).message.getAuthor();
-            trackRequester.ifPresent(user -> amountQueuedByUser.put(user.getId(), amountQueuedByUser.getOrDefault(user.getId(), 1) - 1));
+            final Snowflake userId = ((AdditionalSongInfo)removed.getUserData()).requesterId;
+            amountQueuedByUser.put(userId, amountQueuedByUser.getOrDefault(userId, 1) - 1);
             player.startTrack(removed, true);
         }
     }
@@ -285,8 +299,8 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
                     if (GUILD_AUDIOS.get(snowflake).isQueueLooping) {
                         currentTracks.add(track.makeClone());
                     } else {
-                        final Optional<User> trackRequester = ((AdditionalSongInfo)removed.getUserData()).message.getAuthor();
-                        trackRequester.ifPresent(user -> amountQueuedByUser.put(user.getId(), amountQueuedByUser.getOrDefault(user.getId(), 1) - 1));
+                        final Snowflake userId = ((AdditionalSongInfo)removed.getUserData()).requesterId;
+                        amountQueuedByUser.put(userId, amountQueuedByUser.getOrDefault(userId, 1) - 1);
                     }
                 }
             }
@@ -310,8 +324,7 @@ public final class TrackScheduler extends AudioEventAdapter implements AudioLoad
         final String uri = track.getInfo().uri;
         final String thumbnailUri = uri.contains("soundcloud.com") ? "https://developers.soundcloud.com/assets/logo_big_white-65c2b096da68dd533db18b9f07d14054.png" : "https://i.ytimg.com/vi/" + uri.substring(uri.indexOf("=") + 1) + "/hq720.jpg";
         final String authorUri = uri.contains("soundcloud.com") ? uri.substring(0, uri.lastIndexOf("/")) : "";
-        final Optional<User> optionalUser = ((AdditionalSongInfo) track.getUserData()).message.getAuthor();
-        final String requesterName = optionalUser.map(User::getUsername).orElse("");
+        final String requesterName = getAuthorFromId(guild, (AdditionalSongInfo) track.getUserData());
         channel.createEmbed(spec -> spec.setColor(Bot.THEME_COLOR).setTitle("**" + track.getInfo().title + "**").setUrl(uri).setThumbnail(thumbnailUri).addField("Requested By", requesterName, false).setAuthor(track.getInfo().author, authorUri, "")).block();
     }
 

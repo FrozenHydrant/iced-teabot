@@ -1,5 +1,5 @@
 
-import discord4j.core.object.entity.Message;
+import discord4j.common.util.Snowflake;
 import reactor.util.annotation.NonNull;
 
 /*
@@ -7,8 +7,8 @@ import reactor.util.annotation.NonNull;
 */
 public final class AdditionalSongInfo {
     @NonNull
-    public final Message message;
-    public AdditionalSongInfo(@NonNull Message message) {
-        this.message = message;
+    public final Snowflake requesterId;
+    public AdditionalSongInfo(@NonNull Snowflake requesterId) {
+        this.requesterId = requesterId;
     }
 }

@@ -24,6 +24,7 @@ import reactor.netty.http.client.HttpClient;
 
 import java.io.BufferedReader;
 import java.io.FileReader;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.*;
@@ -50,6 +51,7 @@ public class Bot {
             final Snowflake snowflake = getCurrentSnowflake(guild);
             final MessageChannel channel = GUILD_AUDIOS.get(snowflake).messageChannel;
             channel.createMessage("**Pong!**").block();
+            saveQueue();
         });
         COMMANDS.put("join", event -> {
             final Guild guild = event.getGuild().block();
@@ -115,8 +117,8 @@ public class Bot {
                 final String uri = song.getInfo().uri;
                 final String thumbnailUri = uri.contains("soundcloud.com") ? "https://developers.soundcloud.com/assets/logo_big_white-65c2b096da68dd533db18b9f07d14054.png" : "https://i.ytimg.com/vi/" + uri.substring(uri.indexOf("=") + 1) + "/hq720.jpg";
                 final String authorUri = uri.contains("soundcloud.com") ? uri.substring(0, uri.lastIndexOf("/")) : "";
-                final Optional<User> optionalUser = ((AdditionalSongInfo) song.getUserData()).message.getAuthor();
-                final String requesterName = optionalUser.map(User::getUsername).orElse("");
+                final Snowflake userId = ((AdditionalSongInfo) song.getUserData()).requesterId;
+                final String requesterName = Objects.requireNonNull(guild.getMemberById(userId).block()).getDisplayName();
                 channel.createEmbed(spec -> spec.setColor(THEME_COLOR).setTitle("Now Playing").addField(song.getInfo().title, tidiedDesc, false).addField("Requested By", requesterName, false).setUrl(uri).setThumbnail(thumbnailUri).setAuthor(song.getInfo().author, authorUri, "")).block();
             } else {
                 channel.createMessage("**No track is currently playing.**").block();
@@ -179,9 +181,9 @@ public class Bot {
                         return;
                     }
                 }
-                trackScheduler.updateMostRecentMessage(message);
-                PLAYER_MANAGER.loadItem(arguments[1], trackScheduler);
                 if (event.getMember().isPresent()) {
+                    trackScheduler.updateSenderMostRecent(event.getMember().get());
+                    PLAYER_MANAGER.loadItem(arguments[1], trackScheduler);
                     joinCall(snowflake, event.getMember().get());
                 }
             }
@@ -205,7 +207,7 @@ public class Bot {
                 }
             }
             try {
-                messageToBeSent = trackScheduler.songList(tentativePageNum);
+                messageToBeSent = trackScheduler.songListString(tentativePageNum);
             } catch (IndexOutOfBoundsException e) {
                 channel.createEmbed(spec -> spec.setColor(THEME_COLOR).setTitle("Error Executing Command").setDescription("**" + arguments[1] + "** is out of range!")).block();
                 return;
@@ -362,7 +364,7 @@ public class Bot {
                 if (messageContent.charAt(0) == '%') {
                     final Snowflake snowflake = getCurrentSnowflake(guild);
                     if (!GUILD_AUDIOS.containsKey(snowflake)) {
-                        GUILD_AUDIOS.put(snowflake, new GuildAudioManager(PLAYER_MANAGER, GUILD_AUDIOS, snowflake));
+                        GUILD_AUDIOS.put(snowflake, new GuildAudioManager(PLAYER_MANAGER, GUILD_AUDIOS, snowflake, guild));
                     }
                     GUILD_AUDIOS.get(snowflake).messageChannel = channel;
                     final int firstSpace = messageContent.indexOf(" ");
@@ -375,6 +377,23 @@ public class Bot {
         }
 
         gateway.onDisconnect().block();
+    }
+
+    public static void saveQueue() throws IOException{
+        try (FileWriter queueSaveFile = new FileWriter("queue.txt")) {
+            for (Snowflake snowflake: GUILD_AUDIOS.keySet()) {
+                queueSaveFile.write(snowflake.asString());
+                queueSaveFile.write("\n");
+                List<AudioTrack> listOfSongs = GUILD_AUDIOS.get(snowflake).scheduler.songList();
+                for (AudioTrack song: listOfSongs) {
+                    queueSaveFile.write(song.getInfo().uri);
+                    queueSaveFile.write(" ");
+                    queueSaveFile.write(((AdditionalSongInfo) song.getUserData()).requesterId.asString());
+                    queueSaveFile.write("\n");
+                }
+            }
+            queueSaveFile.write("-END-\n");
+        }
     }
 
     /*
@@ -443,6 +462,6 @@ public class Bot {
 
 
     public interface Command {
-        void execute(MessageCreateEvent event);
+        void execute(MessageCreateEvent event) throws IOException;
     }
 }
